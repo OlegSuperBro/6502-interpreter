@@ -1,3 +1,4 @@
+#![allow(clippy::upper_case_acronyms)] // idk, uppercase instructions feels better for me
 
 #[derive(Debug, PartialEq)]
 pub enum LoadOp {

@@ -26,6 +26,51 @@ pub struct Instruction {
     pub value: u16
 }
 
+pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction), Box<dyn Error>>  {
+    let mut result_offset = 1;
+
+    println!("{addr}");
+
+    let instruction = data[addr as usize];
+
+    let opcode_group = parse_group(&instruction)?;
+    let opcode = parse_opcode(&instruction, &opcode_group)?;
+    let addressing_mode = parse_address_mode(&instruction, &opcode, &opcode_group)?;
+
+    let mut value: u16 = 0;
+
+    match addressing_mode {
+        // Read 0 more bytes
+        AddressingMode::Implicit |
+        AddressingMode::Accumulator => {}
+
+        // Read 1 more byte
+        AddressingMode::Immediate |
+        AddressingMode::ZeroPage |
+        AddressingMode::ZeroPageX |
+        AddressingMode::ZeroPageY |
+        AddressingMode::IndexedIndirect |
+        AddressingMode::IndirectIndexed => {
+            result_offset += 1;
+            value = data[(addr + 1) as usize] as u16;
+        }
+
+        // Read 2 more bytes
+        AddressingMode::Absolute => {
+            result_offset += 1;
+            value = data[(addr + 1) as usize] as u16;
+            result_offset += 1;
+            value |= (data[(addr + 2) as usize] as u16) << 8;
+        }
+
+        _ => {
+            todo!("addressing mode {addressing_mode:?}")
+        }
+    }
+
+    Ok((result_offset, Instruction { opcode, addressing_mode, value }))
+}
+
 pub fn parse_bin(data: &[u8]) -> Result<Vec<Instruction>, Box<dyn Error>> {
     let mut instructions: Vec<Instruction> = Vec::new();
 
@@ -76,7 +121,7 @@ pub fn parse_bin(data: &[u8]) -> Result<Vec<Instruction>, Box<dyn Error>> {
         }
     }
 
-    return Ok(instructions);
+    Ok(instructions)
 }
 
 
@@ -88,6 +133,7 @@ enum OpCodeGroup {
 
     // those groups are handled separatly
     BranchGroup = 0b0100,
+    OtherGroup
 }
 
 impl TryFrom<u8> for OpCodeGroup {
@@ -111,6 +157,8 @@ fn parse_group(byte: &u8) -> Result<OpCodeGroup, ParseError> {
         return Ok(OpCodeGroup::BranchGroup);
     } else if let Ok(opcode_group) = OpCodeGroup::try_from(group) {
         return Ok(opcode_group);
+    } else {
+        return Ok(OpCodeGroup::OtherGroup)
     }
 
     Err(ParseError::InvalidOpCodeGroup(*byte))
@@ -156,7 +204,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
         return Ok(opcode)
     }
 
-    let opcode = match group {
+    match group {
         OpCodeGroup::Group1 =>
             match opcode_byte {
                 0b000 => Ok(OpCode::Logical(LogicOp::ORA)),
@@ -192,8 +240,9 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
                 0b111 => Ok(OpCode::Arithmetic(ArithmeticOp::CPX)),
                 _ => todo!("Invalid byte opcode")
             }
-        OpCodeGroup::BranchGroup =>
-            match byte {
+        OpCodeGroup::BranchGroup => {
+            let masked_byte = byte & 0b00011111;
+            match masked_byte {
                 0x10 => Ok(OpCode::Branch(BranchOp::BPL)),
                 0x30 => Ok(OpCode::Branch(BranchOp::BMI)),
                 0x50 => Ok(OpCode::Branch(BranchOp::BVC)),
@@ -205,12 +254,10 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
 
                 _ => Err(ParseError::InvalidOpCode("Branch", *byte))
             }
-        _ => {
-            todo!("Invalid opcode group: {group:?}")
         }
-    };
 
-    return opcode
+        OpCodeGroup::OtherGroup => Err(ParseError::InvalidOpCode("OtherUnreachable", *byte)) // before this match statement, we did handled "other" instructions
+    }
 }
 
 fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result<AddressingMode, ParseError> {
@@ -221,7 +268,7 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
 
     let opcode_mode = (byte & 0b00011100) >> 2;
 
-    let addressing_mode = match group {
+    match group {
         OpCodeGroup::Group1 =>
             match opcode_mode {
                 0b000 => Ok(AddressingMode::IndexedIndirect),
@@ -256,7 +303,5 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
                 _ => Err(ParseError::InvalidAddressingMode(*byte)),
             }
         _ => todo!("opcode group: {group:?}")
-    };
-
-    return addressing_mode;
+    }
 }
