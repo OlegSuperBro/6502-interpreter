@@ -1,6 +1,6 @@
 #![allow(clippy::upper_case_acronyms)] // idk, uppercase instructions feels better for me
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LoadOp {
     LDA,
     LDX,
@@ -10,7 +10,7 @@ pub enum LoadOp {
     STY,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RegTransOp {
     TAX,
     TAY,
@@ -18,7 +18,7 @@ pub enum RegTransOp {
     TYA,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StackOp {
     TSX,
     TXS,
@@ -28,7 +28,7 @@ pub enum StackOp {
     PLP,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LogicOp {
     AND,
     EOR,
@@ -36,7 +36,7 @@ pub enum LogicOp {
     BIT,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ArithmeticOp {
     ADC,
     SBC,
@@ -45,7 +45,7 @@ pub enum ArithmeticOp {
     CPY,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IncDecOp {
     INC,
     INX,
@@ -55,7 +55,7 @@ pub enum IncDecOp {
     DEY,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ShiftOp {
     ASL,
     LSR,
@@ -63,14 +63,14 @@ pub enum ShiftOp {
     ROR,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum JumpCallOp {
     JMP,
     JSR,
     RTS,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BranchOp {
     BCC,
     BCS,
@@ -82,7 +82,7 @@ pub enum BranchOp {
     BVS,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StatusFlagOp {
     CLC,
     CLD,
@@ -93,7 +93,7 @@ pub enum StatusFlagOp {
     SEI,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SystemFuncOp {
     BRK,
     NOP,
@@ -101,7 +101,7 @@ pub enum SystemFuncOp {
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum OpCode {
     Load(LoadOp),
     RegTrans(RegTransOp),

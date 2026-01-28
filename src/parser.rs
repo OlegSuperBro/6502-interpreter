@@ -2,7 +2,7 @@ use std::error::Error;
 
 use crate::{errors::ParseError, instructions::{ArithmeticOp, BranchOp, IncDecOp, JumpCallOp, LoadOp, LogicOp, OpCode, RegTransOp, ShiftOp, StackOp, StatusFlagOp, SystemFuncOp}};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum AddressingMode {
     Implicit,
     Accumulator,
@@ -19,7 +19,7 @@ pub enum AddressingMode {
     IndirectIndexed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     pub opcode: OpCode,
     pub addressing_mode: AddressingMode,
@@ -29,7 +29,7 @@ pub struct Instruction {
 pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction), Box<dyn Error>>  {
     let mut result_offset = 1;
 
-    println!("{addr}");
+    println!("{addr:#x}");
 
     let instruction = data[addr as usize];
 
@@ -50,7 +50,8 @@ pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction),
         AddressingMode::ZeroPageX |
         AddressingMode::ZeroPageY |
         AddressingMode::IndexedIndirect |
-        AddressingMode::IndirectIndexed => {
+        AddressingMode::IndirectIndexed |
+        AddressingMode::Relative => {
             result_offset += 1;
             value = data[(addr + 1) as usize] as u16;
         }
@@ -70,60 +71,6 @@ pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction),
 
     Ok((result_offset, Instruction { opcode, addressing_mode, value }))
 }
-
-pub fn parse_bin(data: &[u8]) -> Result<Vec<Instruction>, Box<dyn Error>> {
-    let mut instructions: Vec<Instruction> = Vec::new();
-
-    let mut index = 0;
-    loop {
-        let byte = data[index];
-
-        println!("{index}");
-        let opcode_group = parse_group(&byte)?;
-        let opcode = parse_opcode(&byte, &opcode_group)?;
-        let addressing_mode = parse_address_mode(&byte, &opcode, &opcode_group)?;
-
-        let mut value: u16 = 0;
-
-        match addressing_mode {
-            // Read 0 more bytes
-            AddressingMode::Implicit |
-            AddressingMode::Accumulator => {}
-
-            // Read 1 more byte
-            AddressingMode::Immediate |
-            AddressingMode::ZeroPage |
-            AddressingMode::ZeroPageX |
-            AddressingMode::ZeroPageY |
-            AddressingMode::IndexedIndirect |
-            AddressingMode::IndirectIndexed => {
-                index += 1;
-                value = data[index] as u16;
-            }
-
-            // Read 2 more bytes
-            AddressingMode::Absolute => {
-                index += 1;
-                value = data[index] as u16;
-                index += 1;
-                value |= (data[index] as u16) << 8;
-            }
-
-            _ => {
-                todo!("addressing mode {addressing_mode:?}")
-            }
-        }
-
-        index += 1;
-        instructions.push(Instruction { opcode, addressing_mode, value });
-        if index >= data.len() {
-            break;
-        }
-    }
-
-    Ok(instructions)
-}
-
 
 #[derive(Debug, PartialEq)]
 enum OpCodeGroup {
@@ -153,12 +100,12 @@ impl TryFrom<u8> for OpCodeGroup {
 fn parse_group(byte: &u8) -> Result<OpCodeGroup, ParseError> {
     let group = byte & 0b00000011;
 
-    if byte & 0b00010000 == 0b00010000 {
+    if (byte & 0b00010000 == 0b00010000) && (byte & 0b00001111 == 0) {
         return Ok(OpCodeGroup::BranchGroup);
+    } else if parse_other_opcode(byte).is_some(){
+        return Ok(OpCodeGroup::OtherGroup)
     } else if let Ok(opcode_group) = OpCodeGroup::try_from(group) {
         return Ok(opcode_group);
-    } else {
-        return Ok(OpCodeGroup::OtherGroup)
     }
 
     Err(ParseError::InvalidOpCodeGroup(*byte))
@@ -168,39 +115,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
     let opcode_byte = (byte & 0b11100000) >> 5;
 
     // TODO should be refactored, but i need to check, how those command are distinct from others
-    if let Some(opcode) = match byte {
-        0x00 => Some(OpCode::SystemFunc(SystemFuncOp::BRK)),
-        0x20 => Some(OpCode::JumpCall(JumpCallOp::JSR)),
-        0x40 => Some(OpCode::SystemFunc(SystemFuncOp::RTI)),
-        0x60 => Some(OpCode::JumpCall(JumpCallOp::RTS)),
-
-        0x08 => Some(OpCode::Stack(StackOp::PHP)),
-        0x28 => Some(OpCode::Stack(StackOp::PLP)),
-        0x48 => Some(OpCode::Stack(StackOp::PHA)),
-        0x68 => Some(OpCode::Stack(StackOp::PLA)),
-        0x88 => Some(OpCode::IncDec(IncDecOp::DEY)),
-        0xA8 => Some(OpCode::RegTrans(RegTransOp::TAY)),
-        0xC8 => Some(OpCode::IncDec(IncDecOp::INY)),
-        0xE8 => Some(OpCode::IncDec(IncDecOp::INX)),
-
-        0x18 => Some(OpCode::StatusFlag(StatusFlagOp::CLC)),
-        0x38 => Some(OpCode::StatusFlag(StatusFlagOp::SEC)),
-        0x58 => Some(OpCode::StatusFlag(StatusFlagOp::CLI)),
-        0x78 => Some(OpCode::StatusFlag(StatusFlagOp::SEI)),
-        0x98 => Some(OpCode::RegTrans(RegTransOp::TYA)),
-        0xB8 => Some(OpCode::StatusFlag(StatusFlagOp::CLV)),
-        0xD8 => Some(OpCode::StatusFlag(StatusFlagOp::CLD)),
-        0xF8 => Some(OpCode::StatusFlag(StatusFlagOp::SED)),
-
-        0x8A => Some(OpCode::RegTrans(RegTransOp::TXA)),
-        0x9A => Some(OpCode::Stack(StackOp::TXS)),
-        0xAA => Some(OpCode::RegTrans(RegTransOp::TAX)),
-        0xBA => Some(OpCode::Stack(StackOp::TSX)),
-        0xCA => Some(OpCode::IncDec(IncDecOp::DEX)),
-        0xEA => Some(OpCode::SystemFunc(SystemFuncOp::NOP)),
-
-        _ => None
-    } {
+    if let Some(opcode) = parse_other_opcode(byte) {
         return Ok(opcode)
     }
 
@@ -241,8 +156,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
                 _ => todo!("Invalid byte opcode")
             }
         OpCodeGroup::BranchGroup => {
-            let masked_byte = byte & 0b00011111;
-            match masked_byte {
+            match byte {
                 0x10 => Ok(OpCode::Branch(BranchOp::BPL)),
                 0x30 => Ok(OpCode::Branch(BranchOp::BMI)),
                 0x50 => Ok(OpCode::Branch(BranchOp::BVC)),
@@ -257,6 +171,42 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
         }
 
         OpCodeGroup::OtherGroup => Err(ParseError::InvalidOpCode("OtherUnreachable", *byte)) // before this match statement, we did handled "other" instructions
+    }
+}
+
+fn parse_other_opcode(byte: &u8) -> Option<OpCode> {
+    match byte {
+        0x00 => Some(OpCode::SystemFunc(SystemFuncOp::BRK)),
+        0x20 => Some(OpCode::JumpCall(JumpCallOp::JSR)),
+        0x40 => Some(OpCode::SystemFunc(SystemFuncOp::RTI)),
+        0x60 => Some(OpCode::JumpCall(JumpCallOp::RTS)),
+
+        0x08 => Some(OpCode::Stack(StackOp::PHP)),
+        0x28 => Some(OpCode::Stack(StackOp::PLP)),
+        0x48 => Some(OpCode::Stack(StackOp::PHA)),
+        0x68 => Some(OpCode::Stack(StackOp::PLA)),
+        0x88 => Some(OpCode::IncDec(IncDecOp::DEY)),
+        0xA8 => Some(OpCode::RegTrans(RegTransOp::TAY)),
+        0xC8 => Some(OpCode::IncDec(IncDecOp::INY)),
+        0xE8 => Some(OpCode::IncDec(IncDecOp::INX)),
+
+        0x18 => Some(OpCode::StatusFlag(StatusFlagOp::CLC)),
+        0x38 => Some(OpCode::StatusFlag(StatusFlagOp::SEC)),
+        0x58 => Some(OpCode::StatusFlag(StatusFlagOp::CLI)),
+        0x78 => Some(OpCode::StatusFlag(StatusFlagOp::SEI)),
+        0x98 => Some(OpCode::RegTrans(RegTransOp::TYA)),
+        0xB8 => Some(OpCode::StatusFlag(StatusFlagOp::CLV)),
+        0xD8 => Some(OpCode::StatusFlag(StatusFlagOp::CLD)),
+        0xF8 => Some(OpCode::StatusFlag(StatusFlagOp::SED)),
+
+        0x8A => Some(OpCode::RegTrans(RegTransOp::TXA)),
+        0x9A => Some(OpCode::Stack(StackOp::TXS)),
+        0xAA => Some(OpCode::RegTrans(RegTransOp::TAX)),
+        0xBA => Some(OpCode::Stack(StackOp::TSX)),
+        0xCA => Some(OpCode::IncDec(IncDecOp::DEX)),
+        0xEA => Some(OpCode::SystemFunc(SystemFuncOp::NOP)),
+
+        _ => None
     }
 }
 
@@ -302,6 +252,44 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
                 0b111 => Ok(AddressingMode::AbsoluteX),
                 _ => Err(ParseError::InvalidAddressingMode(*byte)),
             }
-        _ => todo!("opcode group: {group:?}")
+        OpCodeGroup::BranchGroup => Ok(AddressingMode::Relative), // all branch instructions realative only
+
+        OpCodeGroup::OtherGroup => {
+            Ok(AddressingMode::Implicit)
+            // let opcode = parse_other_opcode(byte).unwrap(); // if it's other, then it's absolutely fine
+
+            // match opcode {
+            //     OpCode::StatusFlag(op) =>
+            //     match op {
+            //         StatusFlagOp::CLD => Ok(AddressingMode::Implicit),
+            //         _ => todo!("address mode status flag {op:?}")
+            //     }
+            //     OpCode::Stack(op) =>
+            //     match op {
+            //         StackOp::TXS |
+            //         StackOp::TSX => Ok(AddressingMode::Implicit),
+            //         _ => todo!("address mode stack {op:?}")
+            //     }
+            //     OpCode::IncDec(op) => 
+            //     match op {
+            //         IncDecOp::DEY |
+            //         IncDecOp::DEX => Ok(AddressingMode::Implicit),
+            //         _ => todo!("address mode incdec {op:?}")
+            //     }
+            //     OpCode::SystemFunc(op) =>
+            //     match op {
+            //         SystemFuncOp::NOP => Ok(AddressingMode::Implicit),
+            //         _ => todo!("address mode systemfunc {op:?}")
+            //     }
+            //     OpCode::RegTrans(op) =>
+            //     match op {
+
+            //         RegTransOp::TYA => Ok(AddressingMode::Implicit),
+            //         _ => todo!("address mode regtrans {op:?}")
+            //     }
+            
+            //     _ => todo!("address mode other group invalid opcode {opcode:?}")
+            // }
+        }
     }
 }
