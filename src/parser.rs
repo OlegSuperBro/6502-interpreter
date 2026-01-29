@@ -29,8 +29,6 @@ pub struct Instruction {
 pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction), Box<dyn Error>>  {
     let mut result_offset = 1;
 
-    println!("{addr:#x}");
-
     let instruction = data[addr as usize];
 
     let opcode_group = parse_group(&instruction)?;

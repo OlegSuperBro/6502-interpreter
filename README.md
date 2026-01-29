@@ -9,3 +9,7 @@ https://llx.com/Neil/a2/opcodes.html
 https://github.com/Klaus2m5/6502_65C02_functional_tests
 
 https://cc65.github.io/doc/
+
+https://www.nesdev.org/wiki/Status_flags
+
+https://forums.nesdev.org/viewtopic.php?t=25250
