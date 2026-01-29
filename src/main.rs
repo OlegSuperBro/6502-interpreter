@@ -7,6 +7,7 @@ use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_in
 mod instructions;
 mod parser;
 mod errors;
+mod tracer;
 
 // Currently only used when running https://github.com/Klaus2m5/6502_65C02_functional_tests only because there some thing we need to do, to run tests properly
 const RUNNING_TEST: bool = true;
