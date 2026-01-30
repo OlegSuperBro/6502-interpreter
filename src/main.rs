@@ -1,8 +1,8 @@
 use core::panic;
-use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path};
+use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path, rc::Rc};
 use bitflags::{bitflags};
 
-use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_instruction}};
+use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_instruction}, tracer::Tracer};
 
 mod instructions;
 mod parser;
@@ -771,6 +771,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let run_tracer = args.contains(&"-t".to_string());
+
     let mut cpu = CPU::default();
 
     let data = fs::read(args.last().unwrap())?;
@@ -778,6 +780,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rom = Rom::from(data);
 
     cpu.load_into_ram(&rom);
+
+    if run_tracer {
+        let mut tracer = Tracer::new(Rc::new(cpu));
+
+        tracer.init()?;
+
+        tracer.force_redraw()?;
+
+        loop {
+            let result = tracer.update();
+            if let Ok(stop) = result {
+                if !stop { break };
+            } else {
+                break;
+            }
+        }
+
+        tracer.restore()?;
+
+        return Ok(());
+    }
 
     cpu.reset();
 
