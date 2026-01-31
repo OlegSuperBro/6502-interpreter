@@ -33,6 +33,7 @@ pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction),
 
     let opcode_group = parse_group(&instruction)?;
     let opcode = parse_opcode(&instruction, &opcode_group)?;
+
     let addressing_mode = parse_address_mode(&instruction, &opcode, &opcode_group)?;
 
     let mut value: u16 = 0;

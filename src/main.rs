@@ -2,7 +2,7 @@ use core::panic;
 use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path, rc::Rc};
 use bitflags::{bitflags};
 
-use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_instruction}, tracer::Tracer};
+use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_instruction}, tracer::{Tracer, TracerError}};
 
 mod instructions;
 mod parser;
@@ -788,13 +788,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         tracer.force_redraw()?;
 
+        let mut error: Option<TracerError> = None;
+
         loop {
             let result = tracer.update();
             if let Ok(stop) = result {
                 if !stop { break };
             } else {
+                error = Some(result.unwrap_err());
                 break;
             }
+        }
+
+        if let Some(e) = error {
+            return Err(Box::new(e));
         }
 
         tracer.restore()?;

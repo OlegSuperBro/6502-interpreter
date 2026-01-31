@@ -2,7 +2,7 @@ use std::{error::Error, fmt::{Debug, Display}};
 
 #[derive(Debug)]
 pub enum CommandError {
-    InvalidHotkey,
+    InvalidCommand,
 }
 
 impl Display for CommandError {
