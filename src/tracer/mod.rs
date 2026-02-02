@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, io::{self, Stdout}, rc::Rc};
+use std::{cell::RefCell, error::Error, fmt::format, io::{self, Stdout}, rc::Rc};
 
 use crossterm::{event::{self, KeyCode, KeyEvent}, execute, terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, size}};
 use ratatui::{Terminal, layout::Layout, prelude::CrosstermBackend, style::{Color, Style, Stylize}, text::{Line, Span, Text}, widgets::{self, Block, Padding, Paragraph, Widget}};
@@ -107,20 +107,20 @@ add_parse_executor!{
 }
 
 
-enum Areas {
+pub enum Areas {
     Dissasembly,
     Memory,
     Registry,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum States {
+pub enum States {
     Waiting,
     CommandInput,
     Exit,
 }
 
-struct ProcessorStatusHistoryEntry(u16, ProcessorStatus);
+pub struct ProcessorStatusHistoryEntry(u16, ProcessorStatus);
 
 pub struct Tracer {
     terminal: Option<Rc<RefCell<InitializedTerminal>>>,
@@ -135,6 +135,8 @@ pub struct Tracer {
     pub current_state: States,
 
     pub registry_history: Vec<ProcessorStatusHistoryEntry>,
+
+    pub memory_cursor_pos: usize,
 }
 
 enum Layouts {
@@ -152,6 +154,7 @@ impl Tracer {
             current_state: States::Waiting,
             command_input: String::new(),
 
+            memory_cursor_pos: 0x00,
             terminal: None,
         }
     }
@@ -264,7 +267,7 @@ impl Tracer {
                     _ => Ok(())
                 }
             },
-            event::Event::Paste(_) => todo!(),
+            event::Event::Paste(_) => todo!("command paste"),
 
             _ => Ok(())
         }
@@ -384,13 +387,42 @@ impl Tracer {
                 return acc;
             }
 
-            let mut line = format!("{0:#06x}    ", chunk_index * 16);
+            let mut line = Line::from(format!("{0:#06x}    ", chunk_index * 16));
 
-            values.iter().for_each(|val| {
-                line += format!("{:#04X} ", val).as_str();
+            values.iter().enumerate().for_each(|(index, val)| {
+                let address = chunk_index * 16 + index;
+
+                let is_pos_at_cursor = address == self.memory_cursor_pos;
+                let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
+                let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
+
+                let span: Span;
+
+                if is_pos_at_stack && is_pos_at_cursor && is_pos_at_pc {
+                    line.push_span(Span::from("0x").bg(Color::White).fg(Color::Blue));
+                    span = Span::from(format!("{:02X}", val)).bg(Color::White).fg(Color::Red)
+                } else if is_pos_at_cursor && is_pos_at_pc {
+                    span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Blue);
+                } else if is_pos_at_stack && is_pos_at_cursor {
+                    span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Red);
+                } else if is_pos_at_stack && is_pos_at_pc {
+                    line.push_span(Span::from("0x").fg(Color::Blue));
+                    span = Span::from(format!("{:02X}", val)).fg(Color::Red)
+                } else if is_pos_at_cursor {
+                    span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Black);
+                } else if is_pos_at_pc {
+                    span = Span::from(format!("{:#04X}", val)).fg(Color::Blue);
+                } else {
+                    span = Span::from(format!("{:#04X}", val));
+                }
+
+                line.push_span(span);
+
+                line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
             });
+
         
-            acc.push(Line::from(Span::from(line)));
+            acc.push(line);
 
             acc
         })

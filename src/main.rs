@@ -788,6 +788,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         tracer.force_redraw()?;
 
+
         let mut error: Option<TracerError> = None;
 
         loop {
