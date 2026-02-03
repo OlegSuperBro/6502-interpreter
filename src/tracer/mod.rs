@@ -1,11 +1,11 @@
 use std::{
-    cell::RefCell, convert::identity, io::Stdout, rc::{Rc, Weak}, time::Duration
+    cell::RefCell, convert::identity, fmt::format, io::Stdout, rc::{Rc, Weak}, time::Duration
 };
 
 use crossterm::{event::{self, KeyCode, KeyEvent}, execute, terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, size}};
 use ratatui::{Frame, Terminal, layout::{Layout, Rect}, prelude::CrosstermBackend, style::{Color, Style, Stylize}, text::{Line, Span, Text}, widgets::{self, Block, Padding, Paragraph, Widget}};
 
-use crate::{CPU, ProcessorStatus, tracer::errors::{CommandError, HotkeyError}};
+use crate::{CPU, ProcessorStatus, instructions::{self, Instruction}, parser::parse_instruction, tracer::errors::{CommandError, HotkeyError}};
 
 use macros::{
     add_find_by,
@@ -28,6 +28,8 @@ enum Command {
     DumpMem,
     Run,
     RunUntil,
+    RunSilent,
+    RunSilentUntil,
     SetRunSpeed,
 
     FollowCursor,
@@ -53,6 +55,8 @@ add_find_by!{
             "dumpmem" => Ok(Command::DumpMem),
             "run" => Ok(Command::Run),
             "run_until" => Ok(Command::RunUntil),
+            "run_silent" => Ok(Command::RunSilent),
+            "run_silent_until" => Ok(Command::RunSilentUntil),
             "set_run_speed" => Ok(Command::SetRunSpeed),
             "follow" => Ok(Command::FollowCursor),
 
@@ -128,6 +132,94 @@ add_parse_executor!{
 
 
             tracer.is_cpu_running = true;
+            Ok(())
+        },
+
+        Command::RunSilent => {
+            if args.len() > 0 {
+                let target_address: usize;
+
+                let target_address_arg = args.first().unwrap();
+
+                if target_address_arg.starts_with("0x") {
+                    // TODO replace .unwrap() with check
+                    target_address = tracer.cpu.registers.program_counter as usize + usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
+                } else {
+                    // TODO replace .unwrap() with check
+                    target_address = tracer.cpu.registers.program_counter as usize + target_address_arg.parse::<usize>().unwrap();
+                }
+
+                tracer.running_predicate = Some(Box::new(move |tracer| {
+                    let target_address = target_address;
+
+                    let pc = tracer.cpu.registers.program_counter as usize;
+
+                    if pc >= identity(target_address) {
+                        return false;
+                    }
+    
+                    return true;
+                }));
+
+                tracer.current_state = States::RunningSilent;
+            }
+            
+
+            tracer.is_cpu_running = true;
+            Ok(())
+        },
+        
+        Command::RunSilentUntil => {
+            if args.len() > 0 {
+                let target_address: usize;
+                
+                let target_address_arg = args.first().unwrap();
+                
+                if target_address_arg.starts_with("0x") {
+                    // TODO replace .unwrap() with check
+                    target_address = usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
+                } else {
+                    // TODO replace .unwrap() with check
+                    target_address = target_address_arg.parse::<usize>().unwrap();
+                }
+                
+                tracer.running_predicate = Some(Box::new(move |tracer| {
+                    let target_address = target_address;
+                    
+                    let pc = tracer.cpu.registers.program_counter as usize;
+                    
+                    if pc >= identity(target_address) {
+                        return false;
+                    }
+    
+                    return true;
+                }));
+                tracer.current_state = States::RunningSilent;
+            }
+
+
+            tracer.is_cpu_running = true;
+            Ok(())
+        },
+
+        Command::FollowCursor => {
+            if args.len() > 0 {
+                match *args.first().unwrap() {
+                    "c" => {
+                        tracer.memory_follow_mode = MemoryCursorTracking::Cursor;
+                    }
+                    "pc" => {
+                        tracer.memory_follow_mode = MemoryCursorTracking::ProgramCounter;
+                    }
+                    "sp" => {
+                        tracer.memory_follow_mode = MemoryCursorTracking::StackPointer;
+                    }
+                    _ => {
+                        todo!("invalid argument")
+                    }
+                }
+            }
+
             Ok(())
         },
 
@@ -254,6 +346,7 @@ pub enum Areas {
 pub enum States {
     Waiting,
     CommandInput,
+    RunningSilent,
     Exit,
 }
 
@@ -261,6 +354,8 @@ pub struct ProcessorStatusHistoryEntry(u16, ProcessorStatus);
 
 pub struct Tracer {
     terminal: Option<Rc<RefCell<InitializedTerminal>>>,
+
+    parsed_instructions: Vec<(usize, Instruction)>,
 
     pub cpu: Rc<CPU>,
     pub is_cpu_running: bool,
@@ -276,7 +371,14 @@ pub struct Tracer {
     pub registry_history: Vec<ProcessorStatusHistoryEntry>,
 
     pub memory_cursor_pos: usize,
-    pub memory_follow_pointer: Weak<usize>,
+    pub memory_follow_mode: MemoryCursorTracking,
+}
+
+pub enum MemoryCursorTracking {
+    Cursor,
+    ProgramCounter,
+    StackPointer,
+    Static(u16),
 }
 
 enum Layouts {
@@ -288,22 +390,53 @@ impl Tracer {
     pub fn new(cpu: Rc<CPU>) -> Self {
         Tracer {
             cpu,
+            parsed_instructions: vec![],
             is_cpu_running: false,
             running_predicate: None,
             commands_history: vec![],
-            registry_history: Vec::from([ProcessorStatusHistoryEntry(0x0000, ProcessorStatus::all()), ProcessorStatusHistoryEntry(0x0400, ProcessorStatus::ZeroFlag)]),
+            registry_history: Vec::new(),
             active_area: Areas::Memory,
             current_state: States::Waiting,
             command_input: String::new(),
 
             memory_cursor_pos: 0x00,
-            memory_follow_pointer: Weak::new(),
+            memory_follow_mode: MemoryCursorTracking::Static(0),
             terminal: None,
+        }
+    }
+
+    pub fn update_assembly(&mut self) {
+        self.parsed_instructions = vec![];
+
+        let mut index = 0usize;
+
+        loop {
+            if index >= 0xFFFF {
+                break;
+            }
+
+            if let Ok((offset, instruction)) = parse_instruction(index as u16, &self.cpu.memory.data){
+                self.parsed_instructions.push((index, instruction));
+                index += offset;
+            } else {
+                self.parsed_instructions.push(
+                    (
+                        index,
+                        Instruction {
+                            opcode: crate::instructions::OpCode::Unknown,
+                            addressing_mode: instructions::AddressingMode::Unknown,
+                            value: 0
+                        }
+                    )
+                );
+                index += 1;
+            }
         }
     }
 
     pub fn init(&mut self) -> Result<(), TracerError> {
         self.terminal = Some(Rc::new(RefCell::new(ratatui::init())));
+        self.update_assembly();
         Ok(())
     }
 
@@ -316,19 +449,32 @@ impl Tracer {
         if self.current_state == States::Exit {
             return Ok(false);
         }
-        self.process_inputs()?;
-        self.draw()?;
+        if self.current_state != States::RunningSilent {
+            self.process_inputs()?;
+            self.draw()?;
+        }
 
         if self.is_cpu_running {
             if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
+
                 if let Err(e) = cpu.once() {
                     todo!("Error occured during cpu run {e}")
+                } else {
+                    if (self.registry_history.len() == 0) || (
+                        self.registry_history.last().unwrap().1.bits() != self.cpu.registers.processor_status.bits()
+                    ) {
+                        self.registry_history.push(ProcessorStatusHistoryEntry(self.cpu.registers.program_counter, self.cpu.registers.processor_status.clone()));
+                    }
                 }
             }
 
             if let Some(predicate) = &self.running_predicate {
                 if !predicate(self) {
                     self.is_cpu_running = false;
+
+                    if self.current_state == States::RunningSilent {
+                        self.current_state = States::Waiting;
+                    }
                 }
             }
         }
@@ -493,8 +639,8 @@ impl Tracer {
             f.render_widget(Paragraph::new(disassembly_content).block(disassembly_block), disassembly);
 
             let registry_block = Block::bordered()
-            .padding(Padding::horizontal(1))
-            .title("Registry");
+                                                .padding(Padding::horizontal(1))
+                                                .title("Registry");
             let registry_content = Text::from(self.build_registry_lines(registry_block.inner(parent).height as usize));
             f.render_widget(Paragraph::new(registry_content).block(registry_block), registry);
         
@@ -505,7 +651,7 @@ impl Tracer {
                                             .title("Memory")
                                             .title_top(Line::from(memory_title_top).right_aligned())
                                             .title_bottom(Line::from(memory_title_bottom).right_aligned());
-            let memory_content = Text::from(self.build_memory_lines(0x400, memory_block.inner(parent).height as usize));
+            let memory_content = Text::from(self.build_memory_lines(memory_block.inner(parent).height as usize));
             f.render_widget(Paragraph::new(memory_content).block(memory_block), memory);
         }).map_err(TracerError::IOError).map(|_x| ())
     }
@@ -515,14 +661,39 @@ impl Tracer {
     }
 
     fn build_disassembly_lines(&self, count: usize) -> Vec<Line> {
-        vec![
-            Line::from(Span::from("WIP")
-                .style(
-                    Style::default()
-                        .fg(Color::Green)
-                )
-            ); count
-        ]
+        self.parsed_instructions.iter().fold(Vec::new(), |mut acc, (addr, inst)| {
+            acc.push(Line::from(Span::from(format!("{0:#06x}    {1}", addr, inst))));
+
+            acc
+        })
+        // self.cpu.memory.data[from_addr..].enumerate().fold(Vec::new(), |mut acc, (chunk_index, values)| {
+        //     if chunk_index >= count {
+        //         return acc;
+        //     }
+
+        //     let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr));
+
+        //     values.iter().enumerate().for_each(|(index, val)| {
+        //         let address = chunk_index * 16 + index + from_addr;
+
+        //         let is_pos_at_cursor = address == self.memory_cursor_pos;
+        //         let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
+        //         let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
+
+        //         let span: Span = Span::styled(
+        //                     format!("{:#04X}", val),
+        //                     self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
+        //                 );
+
+        //         line.push_span(span);
+
+        //         line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
+        //     });
+
+        //     acc.push(line);
+
+        //     acc
+        // })
     }
 
     fn build_registry_lines(&self, count: usize) -> Vec<Line> {
@@ -548,40 +719,44 @@ impl Tracer {
         })
     }
 
-    fn build_memory_lines(&self, from_addr: u16, count: usize) -> Vec<Line> {
-        self.cpu.memory.data[(from_addr as usize)..].chunks_exact(16).enumerate().fold(Vec::new(), |mut acc, (chunk_index, values)| {
+    fn build_memory_lines(&self, count: usize) -> Vec<Line> {
+        let from_addr: usize;
+        match self.memory_follow_mode {
+            MemoryCursorTracking::Cursor => {
+                from_addr = 16 * (self.memory_cursor_pos / 16)
+            }
+
+            MemoryCursorTracking::ProgramCounter => {
+                from_addr= 16 * (self.cpu.registers.program_counter / 16) as usize
+            }
+
+            MemoryCursorTracking::StackPointer => {
+                from_addr= 16 * (self.cpu.registers.stack_pointer / 16) as usize
+            }
+
+            MemoryCursorTracking::Static(x) => {
+                from_addr= 16 * (x / 16) as usize
+            }
+        }
+
+        self.cpu.memory.data[from_addr..].chunks_exact(16).enumerate().fold(Vec::new(), |mut acc, (chunk_index, values)| {
             if chunk_index >= count {
                 return acc;
             }
 
-            let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr as usize));
+            let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr));
 
             values.iter().enumerate().for_each(|(index, val)| {
-                let address = chunk_index * 16 + index + from_addr as usize;
+                let address = chunk_index * 16 + index + from_addr;
 
                 let is_pos_at_cursor = address == self.memory_cursor_pos;
                 let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
                 let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
 
-                let span: Span = Span::styled(format!("{:#04X}", val), self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack));
-
-                // if is_pos_at_stack && is_pos_at_cursor && is_pos_at_pc {
-                //     line.push_span(Span::from("0x").bg(Color::White).fg(Color::Blue));
-                    
-                // } else if is_pos_at_cursor && is_pos_at_pc {
-                //     span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Blue);
-                // } else if is_pos_at_stack && is_pos_at_cursor {
-                //     span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Red);
-                // } else if is_pos_at_stack && is_pos_at_pc {
-                //     line.push_span(Span::from("0x").fg(Color::Blue));
-                //     span = Span::from(format!("{:02X}", val)).fg(Color::Red)
-                // } else if is_pos_at_cursor {
-                //     span = Span::from(format!("{:#04X}", val)).bg(Color::White).fg(Color::Black);
-                // } else if is_pos_at_pc {
-                //     span = Span::from(format!("{:#04X}", val)).fg(Color::Blue);
-                // } else {
-                //     span = Span::from(format!("{:#04X}", val));
-                // }
+                let span: Span = Span::styled(
+                            format!("{:#04X}", val),
+                            self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
+                        );
 
                 line.push_span(span);
 

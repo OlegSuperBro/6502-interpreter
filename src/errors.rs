@@ -4,7 +4,8 @@ use std::{error::Error, fmt::Display};
 pub enum ParseError {
     InvalidOpCodeGroup(u8),
     InvalidAddressingMode(u8),
-    InvalidOpCode(&'static str, u8)
+    InvalidOpCode(&'static str, u8),
+    InvalidByteOpCode(u8),
 }
 
 impl Display for ParseError {
@@ -13,7 +14,7 @@ impl Display for ParseError {
             ParseError::InvalidOpCodeGroup(byte) => write!(f, "Invalid OpCode group: {:b}", byte),
             ParseError::InvalidAddressingMode(byte) => write!(f, "Invalid addressing mode: {:b}", byte),
             ParseError::InvalidOpCode(label, byte) => write!(f, "Invalid OpCode. Label: {} Value: {}", label, byte),
-
+            ParseError::InvalidByteOpCode(byte) => write!(f, "Invalid byte for Opcode. Byte: {}", byte) 
         }
     }
 }
