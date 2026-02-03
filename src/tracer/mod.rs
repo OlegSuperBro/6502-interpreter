@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell, convert::identity, fmt::format, io::Stdout, rc::{Rc, Weak}, time::Duration
+    cell::RefCell, convert::identity, fmt::format, io::Stdout, rc::{Rc, Weak}, time::Duration, vec
 };
 
 use crossterm::{event::{self, KeyCode, KeyEvent}, execute, terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, size}};
@@ -168,7 +168,7 @@ add_parse_executor!{
             tracer.is_cpu_running = true;
             Ok(())
         },
-        
+
         Command::RunSilentUntil => {
             if args.len() > 0 {
                 let target_address: usize;
@@ -249,6 +249,8 @@ enum Hotkeys {
     MoveCursorRight,
 
     RunOnce,
+    Stop,
+    Pause,
 
     InputCommand,
     Quit
@@ -264,7 +266,9 @@ add_find_by!{
             KeyCode::Down => Ok(Hotkeys::MoveCursorDown),
             KeyCode::Up => Ok(Hotkeys::MoveCursorUp),
             KeyCode::Enter => Ok(Hotkeys::RunOnce),
-            KeyCode::Char(' ') => Ok(Hotkeys::RunOnce)
+            KeyCode::Char(' ') => Ok(Hotkeys::RunOnce),
+            KeyCode::Char('s') => Ok(Hotkeys::Stop),
+            KeyCode::Char('p') => Ok(Hotkeys::Pause)
         }
     } => Err(HotkeyError::InvalidHotkey)
 }
@@ -331,6 +335,15 @@ add_parse_executor!{
                 todo!("Couldn't get cpu from rc pointer")
             }
             Ok(())
+        },
+        Hotkeys::Stop => {
+            tracer.is_cpu_running = false;
+            tracer.running_predicate = None;
+            Ok(())
+        },
+        Hotkeys::Pause => {
+            tracer.is_cpu_paused = !tracer.is_cpu_paused;
+            Ok(())
         }
     } => todo!("hotkey")
 }
@@ -359,6 +372,7 @@ pub struct Tracer {
 
     pub cpu: Rc<CPU>,
     pub is_cpu_running: bool,
+    pub is_cpu_paused: bool,
     pub running_predicate: Option<Box<dyn Fn(&Tracer) -> bool>>,
 
     pub commands_history: Vec<String>,
@@ -392,6 +406,7 @@ impl Tracer {
             cpu,
             parsed_instructions: vec![],
             is_cpu_running: false,
+            is_cpu_paused: false,
             running_predicate: None,
             commands_history: vec![],
             registry_history: Vec::new(),
@@ -454,7 +469,7 @@ impl Tracer {
             self.draw()?;
         }
 
-        if self.is_cpu_running {
+        if self.is_cpu_running && !self.is_cpu_paused {
             if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
 
                 if let Err(e) = cpu.once() {
@@ -486,7 +501,7 @@ impl Tracer {
     }
 
     fn process_inputs(&mut self) -> Result<(), TracerError> {
-        if let Ok(res) = crossterm::event::poll(Duration::from_millis(1)) {
+        if let Ok(res) = crossterm::event::poll(Duration::from_nanos(1)) {
             if !res {
                 return Ok(());
             }
@@ -629,10 +644,17 @@ impl Tracer {
             }
 
             let horizontal = Layout::horizontal([Fill(1), Fill(3)]);
-            let [disassembly, right_area] = horizontal.areas(parent);
+            let [left_area, right_area] = horizontal.areas(parent);
+
+            let vertical = Layout::vertical([Length(5), Fill(1)]);
+            let [states, disassembly] = vertical.areas(left_area);
 
             let vertical = Layout::vertical([Fill(1), Fill(1)]);
             let [registry, memory] = vertical.areas(right_area);
+
+            let states_block = Block::bordered().padding(Padding::horizontal(1)).title("State");
+            let states_content = Text::from(self.build_states_lines());
+            f.render_widget(Paragraph::new(states_content).block(states_block), states);
 
             let disassembly_block = Block::bordered().padding(Padding::horizontal(1)).title("Disassembly");
             let disassembly_content = Text::from(self.build_disassembly_lines(disassembly_block.inner(parent).height as usize));
@@ -643,7 +665,7 @@ impl Tracer {
                                                 .title("Registry");
             let registry_content = Text::from(self.build_registry_lines(registry_block.inner(parent).height as usize));
             f.render_widget(Paragraph::new(registry_content).block(registry_block), registry);
-        
+
             let memory_title_top = format!("SP: {0} ({0:#06X}) PC: {1} ({1:#06X})", self.cpu.registers.stack_pointer, self.cpu.registers.program_counter);
             let memory_title_bottom = format!("{:#0X}", self.memory_cursor_pos);
             let memory_block = Block::bordered()
@@ -660,9 +682,45 @@ impl Tracer {
         return Layouts::Full;
     }
 
+    fn build_states_lines(&self) -> Vec<Line> {
+        let mut res: Vec<Line> = Vec::new();
+
+        let cpu_state_span: Span;
+
+        if self.is_cpu_paused {
+            cpu_state_span = Span::from("Paused").fg(Color::LightBlue)
+        } else if self.is_cpu_running {
+            cpu_state_span = Span::from("Running").fg(Color::Green)
+        } else {
+            cpu_state_span = Span::from("Waiting")
+        }
+
+        res.push(Line::from(vec![Span::from("CPU State: "), cpu_state_span]));
+
+
+        res
+    }
+
     fn build_disassembly_lines(&self, count: usize) -> Vec<Line> {
-        self.parsed_instructions.iter().fold(Vec::new(), |mut acc, (addr, inst)| {
-            acc.push(Line::from(Span::from(format!("{0:#06x}    {1}", addr, inst))));
+        self.parsed_instructions.iter().enumerate().fold(Vec::new(), |mut acc, (index, (addr, inst))| {
+            let to;
+
+            if let Some(val) = self.parsed_instructions.get(index + 1) {
+                to = val.0;
+            } else {
+                to = usize::MAX;
+            }
+
+            let is_pos_at_cursor = (*addr..to).contains(&self.memory_cursor_pos);
+            let is_pos_at_pc = (self.cpu.registers.program_counter as usize..to).contains(addr);
+            let is_pos_at_stack = (0x100 + self.cpu.registers.stack_pointer as usize..to).contains(addr);
+
+            let span: Span = Span::styled(
+                            format!("{0:#06X}    {1}", addr, inst),
+                            self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
+                        );
+
+            acc.push(Line::from(span));
 
             acc
         })

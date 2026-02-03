@@ -249,6 +249,33 @@ impl Display for Instruction {
     }
 }
 
+impl Instruction {
+    pub fn get_code_size(&self) -> usize {
+         match self.addressing_mode {
+                // Read 0 more bytes
+                AddressingMode::Implicit |
+                AddressingMode::Accumulator => 1,
+
+                // Read 1 more byte
+                AddressingMode::Immediate |
+                AddressingMode::ZeroPage |
+                AddressingMode::ZeroPageX |
+                AddressingMode::ZeroPageY |
+                AddressingMode::IndexedIndirect |
+                AddressingMode::IndirectIndexed |
+                AddressingMode::Relative => 2,
+
+                // Read 2 more bytes
+                AddressingMode::Absolute |
+                AddressingMode::AbsoluteX |
+                AddressingMode::AbsoluteY |
+                AddressingMode::Indirect => 3,
+
+                AddressingMode::Unknown => 1,
+        }
+    }
+}
+
 fn value_to_string(mode: AddressingMode, value: u16) -> String {
     match mode {
         AddressingMode::Implicit |
@@ -256,15 +283,15 @@ fn value_to_string(mode: AddressingMode, value: u16) -> String {
 
         AddressingMode::Accumulator => "A".into(),
 
-        AddressingMode::Immediate => format!("#${:x}", value),
+        AddressingMode::Immediate => format!("#${:02x}", value),
         AddressingMode::ZeroPage => format!("${:02x}", value),
         AddressingMode::ZeroPageX => format!("${:02x},X", value),
         AddressingMode::ZeroPageY => format!("${:02x},Y", value),
         AddressingMode::Relative => format!("*+{}", value),
         
         AddressingMode::Indirect => format!("(${:04x})", value),
-        AddressingMode::IndexedIndirect => format!("(${},X)", value),
-        AddressingMode::IndirectIndexed => format!("(${}),Y", value),
+        AddressingMode::IndexedIndirect => format!("(${:04x},X)", value),
+        AddressingMode::IndirectIndexed => format!("(${:04x}),Y", value),
 
         AddressingMode::Absolute => format!("${:04x}", value),
         AddressingMode::AbsoluteX => format!("${:04x},X", value),
