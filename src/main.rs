@@ -760,6 +760,16 @@ impl CPU {
     fn reset(&mut self) {
         self.registers.program_counter = (self.memory.data[0xFFFD] as u16) << 8 | self.memory.data[0xFFFC] as u16;
     }
+
+    fn once(&mut self) -> Result<(), Box<dyn Error>> {
+        let (offset, instruction) = parse_instruction(self.registers.program_counter, &self.memory.data).inspect_err(|_x| eprintln!("Error during parsing"))?;
+
+        if self.run_instruction(instruction)? {
+            self.registers.program_counter = self.registers.program_counter.wrapping_add(offset as u16);
+        }
+
+        Ok(())
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -780,6 +790,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rom = Rom::from(data);
 
     cpu.load_into_ram(&rom);
+
+    if RUNNING_TEST {
+        cpu.registers.program_counter = 0x0400
+    }
 
     if run_tracer {
         let mut tracer = Tracer::new(Rc::new(cpu));
@@ -811,10 +825,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     cpu.reset();
-
-    if RUNNING_TEST {
-        cpu.registers.program_counter = 0x0400
-    }
 
     let mut prev_address = 0u16;
 
