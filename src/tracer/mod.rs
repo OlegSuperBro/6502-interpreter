@@ -1,27 +1,30 @@
 use std::{
-    cell::RefCell, convert::identity, fmt::format, io::Stdout, rc::{Rc, Weak}, time::Duration, vec
+    cell::RefCell, error::Error, io::Stdout, rc::Rc, time::Duration, vec,
 };
 
-use crossterm::{event::{self, KeyCode, KeyEvent}, execute, terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, size}};
-use ratatui::{Frame, Terminal, layout::{Layout, Rect}, prelude::CrosstermBackend, style::{Color, Style, Stylize}, text::{Line, Span, Text}, widgets::{self, Block, Padding, Paragraph, Widget}};
-
-use crate::{CPU, ProcessorStatus, instructions::{self, Instruction}, parser::parse_instruction, tracer::errors::{CommandError, HotkeyError}};
-
-use macros::{
-    add_find_by,
-    add_info,
-    add_parse_executor,
+use crossterm::{
+    event::{self, KeyCode, KeyEvent},
+    terminal::size,
+};
+use ratatui::{
+    Terminal, layout::{Layout, Rect}, prelude::CrosstermBackend, style::{Color, Style, Stylize}, symbols::line, text::{Line, Span, Text}, widgets::{Block, Padding, Paragraph}
 };
 
-pub use errors::{
-    TracerError
+use crate::{
+    CPU, ProcessorStatus,
+    instructions::{self, Instruction},
+    parser::parse_instruction,
+    tracer::errors::{CommandError, HotkeyError},
 };
 
-pub mod macros;
+use macros::{add_find_by, add_info, add_parse_executor};
+
+pub use errors::TracerError;
+
 mod errors;
+pub mod macros;
 
 type InitializedTerminal = Terminal<CrosstermBackend<Stdout>>;
-
 
 enum Command {
     SetMem,
@@ -31,12 +34,13 @@ enum Command {
     RunSilent,
     RunSilentUntil,
     SetRunSpeed,
+    MoveCursorTo,
 
     FollowCursor,
     Quit,
 }
 
-add_info!{
+add_info! {
     Command Result<&'static str, CommandError> {
         name => {
             Command::SetMem => Ok("set"),
@@ -48,7 +52,7 @@ add_info!{
     } => Err(CommandError::InvalidCommand)
 }
 
-add_find_by!{
+add_find_by! {
     Command Result<Command, CommandError>{
         name<&str> => {
             "setmem" => Ok(Command::SetMem),
@@ -59,42 +63,36 @@ add_find_by!{
             "run_silent_until" => Ok(Command::RunSilentUntil),
             "set_run_speed" => Ok(Command::SetRunSpeed),
             "follow" => Ok(Command::FollowCursor),
+            "move" | "mov" => Ok(Command::MoveCursorTo),
 
             "q" | "quit" => Ok(Command::Quit)
         }
     } => Err(CommandError::InvalidCommand)
 }
 
-add_parse_executor!{
+add_parse_executor! {
     Command (args &[&str], tracer &mut Tracer) Result<(), CommandError> {
         Command::SetMem => {
             Ok(())
         },
 
         Command::Run => {
-            if args.len() > 0 {
-                let target_address: usize;
-
+            if !args.is_empty() {
+                
                 let target_address_arg = args.first().unwrap();
-
-                if target_address_arg.starts_with("0x") {
-                    // TODO replace .unwrap() with check
-                    target_address = tracer.cpu.registers.program_counter as usize + usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
-                } else {
-                    // TODO replace .unwrap() with check
-                    target_address = tracer.cpu.registers.program_counter as usize + target_address_arg.parse::<usize>().unwrap();
-                }
+                
+                let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 tracer.running_predicate = Some(Box::new(move |tracer| {
                     let target_address = target_address;
 
-                    let pc = tracer.cpu.registers.program_counter as usize;
+                    let pc = tracer.cpu.registers.program_counter;
 
-                    if pc >= identity(target_address) {
+                    if pc >= target_address {
                         return false;
                     }
-    
-                    return true;
+
+                    true
                 }));
             }
 
@@ -104,29 +102,22 @@ add_parse_executor!{
         },
 
         Command::RunUntil => {
-            if args.len() > 0 {
-                let target_address: usize;
-
+            if !args.is_empty() {
+                
                 let target_address_arg = args.first().unwrap();
-
-                if target_address_arg.starts_with("0x") {
-                    // TODO replace .unwrap() with check
-                    target_address = usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
-                } else {
-                    // TODO replace .unwrap() with check
-                    target_address = target_address_arg.parse::<usize>().unwrap();
-                }
+                
+                let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 tracer.running_predicate = Some(Box::new(move |tracer| {
                     let target_address = target_address;
 
-                    let pc = tracer.cpu.registers.program_counter as usize;
+                    let pc = tracer.cpu.registers.program_counter;
 
-                    if pc >= identity(target_address) {
+                    if pc >= target_address {
                         return false;
                     }
-    
-                    return true;
+
+                    true
                 }));
             }
 
@@ -136,63 +127,45 @@ add_parse_executor!{
         },
 
         Command::RunSilent => {
-            if args.len() > 0 {
-                let target_address: usize;
-
+            if !args.is_empty() {    
                 let target_address_arg = args.first().unwrap();
 
-                if target_address_arg.starts_with("0x") {
-                    // TODO replace .unwrap() with check
-                    target_address = tracer.cpu.registers.program_counter as usize + usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
-                } else {
-                    // TODO replace .unwrap() with check
-                    target_address = tracer.cpu.registers.program_counter as usize + target_address_arg.parse::<usize>().unwrap();
-                }
+                let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 tracer.running_predicate = Some(Box::new(move |tracer| {
                     let target_address = target_address;
 
-                    let pc = tracer.cpu.registers.program_counter as usize;
+                    let pc = tracer.cpu.registers.program_counter;
 
-                    if pc >= identity(target_address) {
+                    if pc >= target_address {
                         return false;
                     }
-    
-                    return true;
+
+                    true
                 }));
 
                 tracer.current_state = States::RunningSilent;
             }
-            
+
 
             tracer.is_cpu_running = true;
             Ok(())
         },
 
         Command::RunSilentUntil => {
-            if args.len() > 0 {
-                let target_address: usize;
-                
-                let target_address_arg = args.first().unwrap();
-                
-                if target_address_arg.starts_with("0x") {
-                    // TODO replace .unwrap() with check
-                    target_address = usize::from_str_radix(&target_address_arg[2..], 16).unwrap();
-                } else {
-                    // TODO replace .unwrap() with check
-                    target_address = target_address_arg.parse::<usize>().unwrap();
-                }
-                
+            if !args.is_empty() {
+                let target_address: u16 = parse_addr_argument(tracer, args.first().unwrap()).map_err(|_e| CommandError::InvalidArgument)?;
+
                 tracer.running_predicate = Some(Box::new(move |tracer| {
                     let target_address = target_address;
-                    
-                    let pc = tracer.cpu.registers.program_counter as usize;
-                    
-                    if pc >= identity(target_address) {
+
+                    let pc = tracer.cpu.registers.program_counter;
+
+                    if pc >= target_address {
                         return false;
                     }
-    
-                    return true;
+
+                    true
                 }));
                 tracer.current_state = States::RunningSilent;
             }
@@ -203,7 +176,7 @@ add_parse_executor!{
         },
 
         Command::FollowCursor => {
-            if args.len() > 0 {
+            if !args.is_empty() {
                 match *args.first().unwrap() {
                     "c" => {
                         tracer.memory_follow_mode = MemoryCursorTracking::Cursor;
@@ -223,11 +196,42 @@ add_parse_executor!{
             Ok(())
         },
 
+        Command::MoveCursorTo => {
+            if !args.is_empty() {
+                let target_address: u16 = parse_addr_argument(tracer, args.first().unwrap()).map_err(|_e| CommandError::InvalidArgument)?;
+
+                tracer.memory_cursor_pos = target_address as usize;
+            }
+            Ok(())
+        },
+
         Command::Quit => {
             tracer.current_state = States::Exit;
             Ok(())
         }
     } => Err(CommandError::InvalidCommand)
+}
+
+fn parse_addr_argument(tracer: &Tracer, arg: &str) -> Result<u16, Box<dyn Error>> {
+    let target_address_arg = arg;
+
+    if target_address_arg.starts_with("0x") {
+        if let Some(stripped) = target_address_arg.strip_prefix("0x") {
+            // TODO replace .unwrap() with check
+            Ok(u16::from_str_radix(stripped, 16).unwrap())
+        } else {
+            todo!("Couldn't parse argument")
+        }
+    } else if target_address_arg == "$$" {
+        Ok(tracer.memory_cursor_pos as u16)
+    } else if target_address_arg == "pc" {
+        Ok(tracer.cpu.registers.program_counter)
+    } else if target_address_arg == "sp" {
+        Ok(tracer.cpu.registers.stack_pointer as u16)
+    } else {
+        // TODO replace .unwrap() with check
+        Ok(target_address_arg.parse::<u16>().unwrap())
+    }
 }
 
 impl Command {
@@ -253,10 +257,10 @@ enum Hotkeys {
     Pause,
 
     InputCommand,
-    Quit
+    Quit,
 }
 
-add_find_by!{
+add_find_by! {
     Hotkeys Result<Hotkeys, HotkeyError> {
         code<&KeyCode> => {
             KeyCode::Char(':') => Ok(Hotkeys::InputCommand),
@@ -273,7 +277,7 @@ add_find_by!{
     } => Err(HotkeyError::InvalidHotkey)
 }
 
-add_parse_executor!{
+add_parse_executor! {
     Hotkeys (tracer &mut Tracer) Result<(), HotkeyError> {
         Hotkeys::InputCommand => {
             tracer.current_state = States::CommandInput;
@@ -348,7 +352,6 @@ add_parse_executor!{
     } => todo!("hotkey")
 }
 
-
 pub enum Areas {
     Dissasembly,
     Memory,
@@ -365,6 +368,8 @@ pub enum States {
 
 pub struct ProcessorStatusHistoryEntry(u16, ProcessorStatus);
 
+type CpuRunningPredicate = Option<Box<dyn Fn(&Tracer) -> bool>>;
+
 pub struct Tracer {
     terminal: Option<Rc<RefCell<InitializedTerminal>>>,
 
@@ -373,7 +378,7 @@ pub struct Tracer {
     pub cpu: Rc<CPU>,
     pub is_cpu_running: bool,
     pub is_cpu_paused: bool,
-    pub running_predicate: Option<Box<dyn Fn(&Tracer) -> bool>>,
+    pub running_predicate: CpuRunningPredicate,
 
     pub commands_history: Vec<String>,
     pub command_input: String,
@@ -397,7 +402,7 @@ pub enum MemoryCursorTracking {
 
 enum Layouts {
     Compact,
-    Full
+    Full,
 }
 
 impl Tracer {
@@ -415,7 +420,7 @@ impl Tracer {
             command_input: String::new(),
 
             memory_cursor_pos: 0x00,
-            memory_follow_mode: MemoryCursorTracking::Static(0),
+            memory_follow_mode: MemoryCursorTracking::Cursor,
             terminal: None,
         }
     }
@@ -430,20 +435,20 @@ impl Tracer {
                 break;
             }
 
-            if let Ok((offset, instruction)) = parse_instruction(index as u16, &self.cpu.memory.data){
+            if let Ok((offset, instruction)) =
+                parse_instruction(index as u16, &self.cpu.memory.data)
+            {
                 self.parsed_instructions.push((index, instruction));
                 index += offset;
             } else {
-                self.parsed_instructions.push(
-                    (
-                        index,
-                        Instruction {
-                            opcode: crate::instructions::OpCode::Unknown,
-                            addressing_mode: instructions::AddressingMode::Unknown,
-                            value: 0
-                        }
-                    )
-                );
+                self.parsed_instructions.push((
+                    index,
+                    Instruction {
+                        opcode: crate::instructions::OpCode::Unknown,
+                        addressing_mode: instructions::AddressingMode::Unknown,
+                        value: 0,
+                    },
+                ));
                 index += 1;
             }
         }
@@ -471,25 +476,26 @@ impl Tracer {
 
         if self.is_cpu_running && !self.is_cpu_paused {
             if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
-
                 if let Err(e) = cpu.once() {
                     todo!("Error occured during cpu run {e}")
-                } else {
-                    if (self.registry_history.len() == 0) || (
-                        self.registry_history.last().unwrap().1.bits() != self.cpu.registers.processor_status.bits()
-                    ) {
-                        self.registry_history.push(ProcessorStatusHistoryEntry(self.cpu.registers.program_counter, self.cpu.registers.processor_status.clone()));
-                    }
+                } else if (self.registry_history.is_empty())
+                    || (self.registry_history.last().unwrap().1.bits()
+                        != self.cpu.registers.processor_status.bits())
+                {
+                    self.registry_history.push(ProcessorStatusHistoryEntry(
+                        self.cpu.registers.program_counter,
+                        self.cpu.registers.processor_status,
+                    ));
                 }
             }
 
-            if let Some(predicate) = &self.running_predicate {
-                if !predicate(self) {
-                    self.is_cpu_running = false;
+            if let Some(predicate) = &self.running_predicate
+                && !predicate(self)
+            {
+                self.is_cpu_running = false;
 
-                    if self.current_state == States::RunningSilent {
-                        self.current_state = States::Waiting;
-                    }
+                if self.current_state == States::RunningSilent {
+                    self.current_state = States::Waiting;
                 }
             }
         }
@@ -501,40 +507,34 @@ impl Tracer {
     }
 
     fn process_inputs(&mut self) -> Result<(), TracerError> {
-        if let Ok(res) = crossterm::event::poll(Duration::from_nanos(1)) {
-            if !res {
-                return Ok(());
-            }
+        if let Ok(res) = crossterm::event::poll(Duration::from_nanos(1))
+            && !res
+        {
+            return Ok(());
         }
 
         match self.current_state {
-            States::Waiting => {
-                self.process_hotkey()
-            }
+            States::Waiting => self.process_hotkey(),
 
-            States::CommandInput => {
-                self.process_command_input()
-            }
+            States::CommandInput => self.process_command_input(),
 
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 
     fn process_hotkey(&mut self) -> Result<(), TracerError> {
-        match crossterm::event::read().map_err(TracerError::IOError)? {
-            event::Event::Key(key_event) => {
-                let result = self.process_key(key_event);
+        if let event::Event::Key(key_event) =
+            crossterm::event::read().map_err(TracerError::IOError)?
+        {
+            let result = self.process_key(key_event);
 
-                if let Err(e) = result {
-                    if let TracerError::HotkeyError(HotkeyError::InvalidHotkey) = e {
-                        return Ok(());
-                    } else {
-                        return Err(e);
-                    }
+            if let Err(e) = result {
+                if let TracerError::HotkeyError(HotkeyError::InvalidHotkey) = e {
+                    return Ok(());
+                } else {
+                    return Err(e);
                 }
-            },
-
-            _ => {}
+            }
         };
 
         Ok(())
@@ -543,9 +543,10 @@ impl Tracer {
     fn process_key(&mut self, key_event: KeyEvent) -> Result<(), TracerError> {
         match self.current_state {
             States::Waiting => {
-                let hotkey = Hotkeys::find_by_code(&key_event.code).map_err(|e| TracerError::HotkeyError(e))?;
+                let hotkey =
+                    Hotkeys::find_by_code(&key_event.code).map_err(TracerError::HotkeyError)?;
 
-                Hotkeys::parse_and_run(&hotkey, self).map_err(|e| TracerError::HotkeyError(e))?;
+                Hotkeys::parse_and_run(&hotkey, self).map_err(TracerError::HotkeyError)?;
             }
 
             States::CommandInput => {
@@ -553,19 +554,20 @@ impl Tracer {
                     self.current_state = States::Waiting;
                     return Ok(());
                 }
-            },
-            _ => todo!()
+            }
+            _ => todo!(),
         }
 
         Ok(())
     }
 
-    fn process_command_input(&mut self) ->  Result<(), TracerError> {
+    fn process_command_input(&mut self) -> Result<(), TracerError> {
         match crossterm::event::read().map_err(TracerError::IOError)? {
             event::Event::Key(key_event) => {
                 match key_event.code {
                     KeyCode::Backspace => {
-                        self.command_input = self.command_input[0..self.command_input.len() - 1].to_string();
+                        self.command_input =
+                            self.command_input[0..self.command_input.len() - 1].to_string();
 
                         if self.command_input.is_empty() {
                             self.current_state = States::Waiting;
@@ -589,25 +591,25 @@ impl Tracer {
                         Ok(())
                     }
 
-                    _ => Ok(())
+                    _ => Ok(()),
                 }
-            },
+            }
             event::Event::Paste(_) => todo!("command paste"),
 
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 
     fn process_command(&mut self, input: &str) -> Result<(), TracerError> {
         Command::execute(input, self).map_err(TracerError::CommandError)?;
-        
+
         Ok(())
     }
 
     fn draw(&mut self) -> Result<(), TracerError> {
         if let Some(pointer) = self.terminal.clone() {
             let mut terminal = pointer.borrow_mut();
-            let size = size().map_err(|e| TracerError::IOError(e))?;
+            let size = size().map_err(TracerError::IOError)?;
             match Tracer::get_layout_type(size) {
                 Layouts::Compact => todo!(),
                 Layouts::Full => {
@@ -618,71 +620,96 @@ impl Tracer {
             return Ok(());
         }
 
-        Err(TracerError::TerminalError("Failed to retrieve pointer for terminal during draw"))
+        Err(TracerError::TerminalError(
+            "Failed to retrieve pointer for terminal during draw",
+        ))
     }
 
     fn draw_full(&self, terminal: &mut InitializedTerminal) -> Result<(), TracerError> {
-        terminal.draw(|f| {
-            use ratatui::layout::Constraint::{Fill, Length};
+        terminal
+            .draw(|f| {
+                use ratatui::layout::Constraint::{Fill, Length};
 
-            let parent: Rect;
-            match self.current_state {
-                States::CommandInput => {
-                    let vertical_command = Layout::vertical([Fill(1), Length(3)]);
+                let parent: Rect = match self.current_state {
+                    States::CommandInput => {
+                        let vertical_command = Layout::vertical([Fill(1), Length(3)]);
 
-                    let [panels, command] = vertical_command.areas(f.area());
+                        let [panels, command] = vertical_command.areas(f.area());
 
-                    let command_block = Block::bordered().padding(Padding::horizontal(1)).title("Command");
-                    let command_content = Text::from(Span::from(&self.command_input));
-                    f.render_widget(Paragraph::new(command_content).block(command_block), command);
+                        let command_block = Block::bordered()
+                            .padding(Padding::horizontal(1))
+                            .title("Command");
+                        let command_content = Text::from(Span::from(&self.command_input));
+                        f.render_widget(
+                            Paragraph::new(command_content).block(command_block),
+                            command,
+                        );
 
-                    parent = panels;
-                }
-                _ => {
-                    parent = f.area();
-                }
-            }
+                        panels
+                    }
+                    _ => f.area(),
+                };
 
-            let horizontal = Layout::horizontal([Fill(1), Fill(3)]);
-            let [left_area, right_area] = horizontal.areas(parent);
+                let horizontal = Layout::horizontal([Fill(1), Fill(3)]);
+                let [left_area, right_area] = horizontal.areas(parent);
 
-            let vertical = Layout::vertical([Length(5), Fill(1)]);
-            let [states, disassembly] = vertical.areas(left_area);
+                let vertical = Layout::vertical([Length(5), Fill(1)]);
+                let [states, disassembly] = vertical.areas(left_area);
 
-            let vertical = Layout::vertical([Fill(1), Fill(1)]);
-            let [registry, memory] = vertical.areas(right_area);
+                let vertical = Layout::vertical([Fill(1), Fill(1)]);
+                let [registry, memory] = vertical.areas(right_area);
 
-            let states_block = Block::bordered().padding(Padding::horizontal(1)).title("State");
-            let states_content = Text::from(self.build_states_lines());
-            f.render_widget(Paragraph::new(states_content).block(states_block), states);
+                let states_block = Block::bordered()
+                    .padding(Padding::horizontal(1))
+                    .title("State");
+                let states_content = Text::from(self.build_states_lines());
+                f.render_widget(Paragraph::new(states_content).block(states_block), states);
 
-            let disassembly_block = Block::bordered().padding(Padding::horizontal(1)).title("Disassembly");
-            let disassembly_content = Text::from(self.build_disassembly_lines(disassembly_block.inner(parent).height as usize));
-            f.render_widget(Paragraph::new(disassembly_content).block(disassembly_block), disassembly);
+                let disassembly_block = Block::bordered()
+                    .padding(Padding::horizontal(1))
+                    .title("Disassembly");
+                let disassembly_content = Text::from(
+                    self.build_disassembly_lines(disassembly_block.inner(disassembly).height as usize),
+                );
+                f.render_widget(
+                    Paragraph::new(disassembly_content).block(disassembly_block),
+                    disassembly,
+                );
 
-            let registry_block = Block::bordered()
-                                                .padding(Padding::horizontal(1))
-                                                .title("Registry");
-            let registry_content = Text::from(self.build_registry_lines(registry_block.inner(parent).height as usize));
-            f.render_widget(Paragraph::new(registry_content).block(registry_block), registry);
+                let registry_block = Block::bordered()
+                    .padding(Padding::horizontal(1))
+                    .title("Registry");
+                let registry_content = Text::from(
+                    self.build_registry_lines(registry_block.inner(parent).height as usize),
+                );
+                f.render_widget(
+                    Paragraph::new(registry_content).block(registry_block),
+                    registry,
+                );
 
-            let memory_title_top = format!("SP: {0} ({0:#06X}) PC: {1} ({1:#06X})", self.cpu.registers.stack_pointer, self.cpu.registers.program_counter);
-            let memory_title_bottom = format!("{:#0X}", self.memory_cursor_pos);
-            let memory_block = Block::bordered()
-                                            .padding(Padding::horizontal(1))
-                                            .title("Memory")
-                                            .title_top(Line::from(memory_title_top).right_aligned())
-                                            .title_bottom(Line::from(memory_title_bottom).right_aligned());
-            let memory_content = Text::from(self.build_memory_lines(memory_block.inner(parent).height as usize));
-            f.render_widget(Paragraph::new(memory_content).block(memory_block), memory);
-        }).map_err(TracerError::IOError).map(|_x| ())
+                let memory_title_top = format!(
+                    "SP: {0} ({0:#06X}) PC: {1} ({1:#06X})",
+                    self.cpu.registers.stack_pointer, self.cpu.registers.program_counter
+                );
+                let memory_title_bottom = format!("{:#0X}", self.memory_cursor_pos);
+                let memory_block = Block::bordered()
+                    .padding(Padding::horizontal(1))
+                    .title("Memory")
+                    .title_top(Line::from(memory_title_top).right_aligned())
+                    .title_bottom(Line::from(memory_title_bottom).right_aligned());
+                let memory_content =
+                    Text::from(self.build_memory_lines(memory_block.inner(parent).height as usize));
+                f.render_widget(Paragraph::new(memory_content).block(memory_block), memory);
+            })
+            .map_err(TracerError::IOError)
+            .map(|_x| ())
     }
 
     fn get_layout_type(size: (u16, u16)) -> Layouts {
-        return Layouts::Full;
+        Layouts::Full
     }
 
-    fn build_states_lines(&self) -> Vec<Line> {
+    fn build_states_lines(&'_ self) -> Vec<Line<'_>> {
         let mut res: Vec<Line> = Vec::new();
 
         let cpu_state_span: Span;
@@ -697,64 +724,62 @@ impl Tracer {
 
         res.push(Line::from(vec![Span::from("CPU State: "), cpu_state_span]));
 
-
         res
     }
 
-    fn build_disassembly_lines(&self, count: usize) -> Vec<Line> {
-        self.parsed_instructions.iter().enumerate().fold(Vec::new(), |mut acc, (index, (addr, inst))| {
-            let to;
+    fn build_disassembly_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
+        let pos = match self.memory_follow_mode {
+            MemoryCursorTracking::Cursor => self.memory_cursor_pos,
+            MemoryCursorTracking::ProgramCounter => self.cpu.registers.program_counter as usize,
+            MemoryCursorTracking::StackPointer => self.cpu.registers.stack_pointer as usize,
+            MemoryCursorTracking::Static(x) => x as usize,
+        };
 
-            if let Some(val) = self.parsed_instructions.get(index + 1) {
-                to = val.0;
-            } else {
-                to = usize::MAX;
+        let mut lines: Vec<Line> = vec![];
+        let mut page = 0;
+
+        for chunk in self.parsed_instructions.chunks(count) {
+            let (first_index, _first_instruction) = chunk.first().unwrap();
+            let (last_index, last_instruction) = chunk.last().unwrap();
+
+
+            if !(first_index..&(last_index + last_instruction.get_code_size())).contains(&&pos) {
+                page += 1;
+                continue;
             }
 
-            let is_pos_at_cursor = (*addr..to).contains(&self.memory_cursor_pos);
-            let is_pos_at_pc = (self.cpu.registers.program_counter as usize..to).contains(addr);
-            let is_pos_at_stack = (0x100 + self.cpu.registers.stack_pointer as usize..to).contains(addr);
+            lines = chunk.iter().enumerate().fold(
+                Vec::new(),
+                |mut acc, (index, (addr, inst))| {
+                let to;
 
-            let span: Span = Span::styled(
-                            format!("{0:#06X}    {1}", addr, inst),
-                            self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
-                        );
+                if let Some(val) = self.parsed_instructions.get(page * count + index + 1) {
+                    to = val.0;
+                } else {
+                    to = usize::MAX;
+                }
 
-            acc.push(Line::from(span));
+                let is_pos_at_cursor = (*addr..to).contains(&self.memory_cursor_pos);
+                let is_pos_at_pc = (*addr..to).contains(&(self.cpu.registers.program_counter as usize));
+                let is_pos_at_stack = (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
-            acc
-        })
-        // self.cpu.memory.data[from_addr..].enumerate().fold(Vec::new(), |mut acc, (chunk_index, values)| {
-        //     if chunk_index >= count {
-        //         return acc;
-        //     }
+                let span: Span = Span::styled(
+                                format!("{0:#06X}    {1}", addr, inst),
+                                self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
+                            );
 
-        //     let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr));
+                acc.push(Line::from(span));
 
-        //     values.iter().enumerate().for_each(|(index, val)| {
-        //         let address = chunk_index * 16 + index + from_addr;
+                acc
+            });
 
-        //         let is_pos_at_cursor = address == self.memory_cursor_pos;
-        //         let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
-        //         let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
+            break;
+        }
 
-        //         let span: Span = Span::styled(
-        //                     format!("{:#04X}", val),
-        //                     self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
-        //                 );
-
-        //         line.push_span(span);
-
-        //         line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
-        //     });
-
-        //     acc.push(line);
-
-        //     acc
-        // })
+        lines
     }
 
-    fn build_registry_lines(&self, count: usize) -> Vec<Line> {
+    fn build_registry_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
         self.registry_history.iter().fold(Vec::new(), |mut acc, reg| {
             let string = format!("{:#06X} N: {} V: {} B: {} D: {} I: {} Z: {} C: {} ({:#010b} - {:03}) With B: ({:#010b} - {:03})",
                 reg.0,
@@ -777,71 +802,70 @@ impl Tracer {
         })
     }
 
-    fn build_memory_lines(&self, count: usize) -> Vec<Line> {
-        let from_addr: usize;
-        match self.memory_follow_mode {
-            MemoryCursorTracking::Cursor => {
-                from_addr = 16 * (self.memory_cursor_pos / 16)
-            }
+    fn build_memory_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
+        let from_addr: usize = match self.memory_follow_mode {
+            MemoryCursorTracking::Cursor => 16 * (self.memory_cursor_pos / 16),
 
             MemoryCursorTracking::ProgramCounter => {
-                from_addr= 16 * (self.cpu.registers.program_counter / 16) as usize
+                16 * (self.cpu.registers.program_counter / 16) as usize
             }
 
             MemoryCursorTracking::StackPointer => {
-                from_addr= 16 * (self.cpu.registers.stack_pointer / 16) as usize
+                16 * (self.cpu.registers.stack_pointer / 16) as usize
             }
 
-            MemoryCursorTracking::Static(x) => {
-                from_addr= 16 * (x / 16) as usize
-            }
-        }
+            MemoryCursorTracking::Static(x) => 16 * (x / 16) as usize,
+        };
 
-        self.cpu.memory.data[from_addr..].chunks_exact(16).enumerate().fold(Vec::new(), |mut acc, (chunk_index, values)| {
-            if chunk_index >= count {
-                return acc;
-            }
+        self.cpu.memory.data[from_addr..]
+            .chunks_exact(16)
+            .enumerate()
+            .fold(Vec::new(), |mut acc, (chunk_index, values)| {
+                if chunk_index >= count {
+                    return acc;
+                }
 
-            let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr));
+                let mut line = Line::from(format!("{0:#06x}    ", (chunk_index * 16) + from_addr));
 
-            values.iter().enumerate().for_each(|(index, val)| {
-                let address = chunk_index * 16 + index + from_addr;
+                values.iter().enumerate().for_each(|(index, val)| {
+                    let address = chunk_index * 16 + index + from_addr;
 
-                let is_pos_at_cursor = address == self.memory_cursor_pos;
-                let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
-                let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
+                    let is_pos_at_cursor = address == self.memory_cursor_pos;
+                    let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
+                    let is_pos_at_stack =
+                        address == 0x100 + self.cpu.registers.stack_pointer as usize;
 
-                let span: Span = Span::styled(
-                            format!("{:#04X}", val),
-                            self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
-                        );
+                    let span: Span = Span::styled(
+                        format!("{:#04X}", val),
+                        self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack),
+                    );
 
-                line.push_span(span);
+                    line.push_span(span);
 
-                line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
-            });
+                    line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
+                });
 
-            acc.push(line);
+                acc.push(line);
 
-            acc
-        })
+                acc
+            })
     }
 
     fn get_cursors_style(&self, on_cursor: bool, on_pc: bool, on_stack: bool) -> Style {
         if on_stack && on_cursor && on_pc {
-            return Style::default().bg(Color::White).fg(Color::Magenta);
+            Style::default().bg(Color::White).fg(Color::Magenta)
         } else if on_cursor && on_pc {
-            return Style::default().bg(Color::White).fg(Color::Blue);
+            Style::default().bg(Color::White).fg(Color::Blue)
         } else if on_stack && on_cursor {
-            return Style::default().bg(Color::White).fg(Color::Red);
+            Style::default().bg(Color::White).fg(Color::Red)
         } else if on_stack && on_pc {
-            return Style::default().fg(Color::Magenta)
+            Style::default().fg(Color::Magenta)
         } else if on_cursor {
-            return Style::default().bg(Color::White).fg(Color::Black);
+            Style::default().bg(Color::White).fg(Color::Black)
         } else if on_pc {
-            return Style::default().fg(Color::Blue);
+            Style::default().fg(Color::Blue)
         } else {
-            return Style::default();
+            Style::default()
         }
     }
 }

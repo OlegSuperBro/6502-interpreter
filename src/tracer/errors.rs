@@ -3,6 +3,7 @@ use std::{error::Error, fmt::{Debug, Display}};
 #[derive(Debug)]
 pub enum CommandError {
     InvalidCommand,
+    InvalidArgument,
 }
 
 impl Display for CommandError {
