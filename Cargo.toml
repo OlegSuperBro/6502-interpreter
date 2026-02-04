@@ -2,6 +2,11 @@
 name = "thingy-6502"
 version = "0.1.0"
 edition = "2024"
+proc-macro = true
+
 
 [dependencies]
 bitflags = "2.10.0"
+crossterm = "0.29.0"
+paste = "1.0.15"
+ratatui = "0.30.0"

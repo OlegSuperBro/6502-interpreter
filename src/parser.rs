@@ -1,30 +1,7 @@
 use std::error::Error;
 
-use crate::{errors::ParseError, instructions::{ArithmeticOp, BranchOp, IncDecOp, JumpCallOp, LoadOp, LogicOp, OpCode, RegTransOp, ShiftOp, StackOp, StatusFlagOp, SystemFuncOp}};
+use crate::{errors::ParseError, instructions::{AddressingMode, ArithmeticOp, BranchOp, IncDecOp, Instruction, JumpCallOp, LoadOp, LogicOp, OpCode, RegTransOp, ShiftOp, StackOp, StatusFlagOp, SystemFuncOp}};
 
-#[derive(Debug, Clone, Copy)]
-pub enum AddressingMode {
-    Implicit,
-    Accumulator,
-    Immediate,
-    ZeroPage,
-    ZeroPageX,
-    ZeroPageY,
-    Relative,
-    Absolute,
-    AbsoluteX,
-    AbsoluteY,
-    Indirect,
-    IndexedIndirect,
-    IndirectIndexed,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Instruction {
-    pub opcode: OpCode,
-    pub addressing_mode: AddressingMode,
-    pub value: u16
-}
 
 pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction), Box<dyn Error>>  {
     let mut result_offset = 1;
@@ -33,6 +10,7 @@ pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction),
 
     let opcode_group = parse_group(&instruction)?;
     let opcode = parse_opcode(&instruction, &opcode_group)?;
+
     let addressing_mode = parse_address_mode(&instruction, &opcode, &opcode_group)?;
 
     let mut value: u16 = 0;
@@ -55,7 +33,10 @@ pub fn parse_instruction(addr: u16, data: &[u8]) -> Result<(usize, Instruction),
         }
 
         // Read 2 more bytes
-        AddressingMode::Absolute => {
+        AddressingMode::Absolute |
+        AddressingMode::AbsoluteX |
+        AddressingMode::AbsoluteY |
+        AddressingMode::Indirect => {
             result_offset += 1;
             value = data[(addr + 1) as usize] as u16;
             result_offset += 1;
@@ -128,7 +109,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
                 0b101 => Ok(OpCode::Load(LoadOp::LDA)),
                 0b110 => Ok(OpCode::Arithmetic(ArithmeticOp::CMP)),
                 0b111 => Ok(OpCode::Arithmetic(ArithmeticOp::SBC)),
-                _ => todo!("Invalid byte opcode")
+                _ => Err(ParseError::InvalidByteOpCode(opcode_byte))
             }
         OpCodeGroup::Group2 =>
             match opcode_byte {
@@ -140,7 +121,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
                 0b101 => Ok(OpCode::Load(LoadOp::LDX)),
                 0b110 => Ok(OpCode::IncDec(IncDecOp::DEC)),
                 0b111 => Ok(OpCode::IncDec(IncDecOp::INC)),
-                _ => todo!("Invalid byte opcode")
+                _ => Err(ParseError::InvalidByteOpCode(opcode_byte))
             }
         OpCodeGroup::Group3 =>
             match opcode_byte {
@@ -151,7 +132,7 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
                 0b101 => Ok(OpCode::Load(LoadOp::LDY)),
                 0b110 => Ok(OpCode::Arithmetic(ArithmeticOp::CPY)),
                 0b111 => Ok(OpCode::Arithmetic(ArithmeticOp::CPX)),
-                _ => todo!("Invalid byte opcode")
+                _ => Err(ParseError::InvalidByteOpCode(opcode_byte))
             }
         OpCodeGroup::BranchGroup => {
             match byte {
@@ -254,40 +235,6 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
 
         OpCodeGroup::OtherGroup => {
             Ok(AddressingMode::Implicit)
-            // let opcode = parse_other_opcode(byte).unwrap(); // if it's other, then it's absolutely fine
-
-            // match opcode {
-            //     OpCode::StatusFlag(op) =>
-            //     match op {
-            //         StatusFlagOp::CLD => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode status flag {op:?}")
-            //     }
-            //     OpCode::Stack(op) =>
-            //     match op {
-            //         StackOp::TXS |
-            //         StackOp::TSX => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode stack {op:?}")
-            //     }
-            //     OpCode::IncDec(op) => 
-            //     match op {
-            //         IncDecOp::DEY |
-            //         IncDecOp::DEX => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode incdec {op:?}")
-            //     }
-            //     OpCode::SystemFunc(op) =>
-            //     match op {
-            //         SystemFuncOp::NOP => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode systemfunc {op:?}")
-            //     }
-            //     OpCode::RegTrans(op) =>
-            //     match op {
-
-            //         RegTransOp::TYA => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode regtrans {op:?}")
-            //     }
-            
-            //     _ => todo!("address mode other group invalid opcode {opcode:?}")
-            // }
         }
     }
 }

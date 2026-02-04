@@ -1,12 +1,13 @@
 use core::panic;
-use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path};
+use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path, rc::Rc};
 use bitflags::{bitflags};
 
-use crate::{instructions::OpCode, parser::{AddressingMode, Instruction, parse_instruction}};
+use crate::{instructions::{AddressingMode, Instruction, OpCode}, parser::parse_instruction, tracer::{Tracer, TracerError}};
 
 mod instructions;
 mod parser;
 mod errors;
+mod tracer;
 
 // Currently only used when running https://github.com/Klaus2m5/6502_65C02_functional_tests only because there some thing we need to do, to run tests properly
 const RUNNING_TEST: bool = true;
@@ -81,7 +82,7 @@ impl LowerHex for Rom {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -100,7 +101,7 @@ impl Binary for Rom {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -125,7 +126,7 @@ impl LowerHex for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -144,7 +145,7 @@ impl Binary for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -164,7 +165,7 @@ impl Debug for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -191,6 +192,8 @@ impl Debug for Registers {
             self.processor_status))
     }
 }
+
+#[allow(clippy::upper_case_acronyms)]
 struct CPU {
     memory: Memory,
     registers: Registers,
@@ -419,7 +422,7 @@ impl CPU {
                         self.registers.processor_status |= ProcessorStatus::BreakCommand;
 
                         let _ = self.set_value(AddressingMode::Absolute,
-                                0x0100 + (self.registers.stack_pointer + 0) as u16,
+                                0x0100 + self.registers.stack_pointer as u16,
                                 self.registers.processor_status.bits());
 
                         let _ = self.set_value(AddressingMode::Absolute,
@@ -623,12 +626,12 @@ impl CPU {
             }
         };
 
-        return Ok(can_add_offset);
+        Ok(can_add_offset)
     }
 
     fn get_single_value(&mut self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
         match self.get_value(mode, value) {
-            SingleOrDoubleValue::Single(x) => Ok(x as u8),
+            SingleOrDoubleValue::Single(x) => Ok(x),
             SingleOrDoubleValue::Double(_x) => todo!("Trying to get single value, got double instead with mode {mode:?}")
         }
     }
@@ -636,7 +639,7 @@ impl CPU {
     fn get_double_value(&mut self, mode: AddressingMode, value: u16) -> Result<u16, Box<dyn Error>> {
         match self.get_value(mode, value) {
             SingleOrDoubleValue::Single(_x) => todo!("Trying to get double value, got single instead with mode {mode:?}"),
-            SingleOrDoubleValue::Double(x) => Ok(x as u16)
+            SingleOrDoubleValue::Double(x) => Ok(x)
         }
     }
 
@@ -741,14 +744,14 @@ impl CPU {
     fn stack_push(&mut self, value: u8) {
         self.memory.data[0x100 + self.registers.stack_pointer as usize] = value;
         let _ = fs::write(format!("memdump/{} {:#X} - ps {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
-        
+
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_sub(1);
-        
+
     }
-    
+
     fn stack_pull(&mut self) -> u8 {
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_add(1);
-        
+
         let address = 0x100 + self.registers.stack_pointer as u16;
         let value = self.memory.data[address as usize];
         let _ = fs::write(format!("memdump/{} {:#X} - pl {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
@@ -758,6 +761,16 @@ impl CPU {
 
     fn reset(&mut self) {
         self.registers.program_counter = (self.memory.data[0xFFFD] as u16) << 8 | self.memory.data[0xFFFC] as u16;
+    }
+
+    fn once(&mut self) -> Result<(), Box<dyn Error>> {
+        let (offset, instruction) = parse_instruction(self.registers.program_counter, &self.memory.data).inspect_err(|_x| eprintln!("Error during parsing"))?;
+
+        if self.run_instruction(instruction)? {
+            self.registers.program_counter = self.registers.program_counter.wrapping_add(offset as u16);
+        }
+
+        Ok(())
     }
 }
 
@@ -770,6 +783,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let run_tracer = args.contains(&"-t".to_string());
+
     let mut cpu = CPU::default();
 
     let data = fs::read(args.last().unwrap())?;
@@ -778,11 +793,40 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     cpu.load_into_ram(&rom);
 
-    cpu.reset();
-
     if RUNNING_TEST {
         cpu.registers.program_counter = 0x0400
     }
+
+    if run_tracer {
+        let mut tracer = Tracer::new(Rc::new(cpu));
+
+        tracer.init()?;
+
+        tracer.force_redraw()?;
+
+
+        let mut error: Option<TracerError> = None;
+
+        loop {
+            let result = tracer.update();
+            if let Ok(stop) = result {
+                if !stop { break };
+            } else {
+                error = Some(result.unwrap_err());
+                break;
+            }
+        }
+
+        if let Some(e) = error {
+            return Err(Box::new(e));
+        }
+
+        tracer.restore()?;
+
+        return Ok(());
+    }
+
+    cpu.reset();
 
     let mut prev_address = 0u16;
 
@@ -809,11 +853,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             if STOP_EACH_INSTRUCTION {
                 let _ = io::stdin().read(&mut [0u8]);
             }
-            if STOP_ON_JUMP_INSTRUCTION {
-                if instruction.opcode == OpCode::JumpCall(instructions::JumpCallOp::JMP) {
+            if STOP_ON_JUMP_INSTRUCTION
+                && instruction.opcode == OpCode::JumpCall(instructions::JumpCallOp::JMP) {
                     let _ = io::stdin().read(&mut [0u8]);
                 }
-            }
         }
 
         if prev_address == cpu.registers.program_counter {
@@ -823,18 +866,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         prev_address = cpu.registers.program_counter;
     }
-
-    // let instructions = parser::parse_bin(data.as_slice())?;
-
-    // for instruction in instructions {
-    //     println!("{instruction:?}");
-
-    //     cpu.run_instruction(instruction);
-
-    //     let reg = &cpu.registers;
-    //     println!("{reg:?}");
-    //     let _ = io::stdin().read(&mut [0u8]);
-    // }
-
-    Ok(())
 }
