@@ -235,40 +235,6 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
 
         OpCodeGroup::OtherGroup => {
             Ok(AddressingMode::Implicit)
-            // let opcode = parse_other_opcode(byte).unwrap(); // if it's other, then it's absolutely fine
-
-            // match opcode {
-            //     OpCode::StatusFlag(op) =>
-            //     match op {
-            //         StatusFlagOp::CLD => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode status flag {op:?}")
-            //     }
-            //     OpCode::Stack(op) =>
-            //     match op {
-            //         StackOp::TXS |
-            //         StackOp::TSX => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode stack {op:?}")
-            //     }
-            //     OpCode::IncDec(op) => 
-            //     match op {
-            //         IncDecOp::DEY |
-            //         IncDecOp::DEX => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode incdec {op:?}")
-            //     }
-            //     OpCode::SystemFunc(op) =>
-            //     match op {
-            //         SystemFuncOp::NOP => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode systemfunc {op:?}")
-            //     }
-            //     OpCode::RegTrans(op) =>
-            //     match op {
-
-            //         RegTransOp::TYA => Ok(AddressingMode::Implicit),
-            //         _ => todo!("address mode regtrans {op:?}")
-            //     }
-            
-            //     _ => todo!("address mode other group invalid opcode {opcode:?}")
-            // }
         }
     }
 }

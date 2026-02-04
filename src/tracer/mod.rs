@@ -1,13 +1,16 @@
-use std::{
-    cell::RefCell, error::Error, io::Stdout, rc::Rc, time::Duration, vec,
-};
+use std::{cell::RefCell, error::Error, io::Stdout, rc::Rc, time::Duration, vec};
 
 use crossterm::{
     event::{self, KeyCode, KeyEvent},
     terminal::size,
 };
 use ratatui::{
-    Terminal, layout::{Layout, Rect}, prelude::CrosstermBackend, style::{Color, Style, Stylize}, symbols::line, text::{Line, Span, Text}, widgets::{Block, Padding, Paragraph}
+    Terminal,
+    layout::{Layout, Rect},
+    prelude::CrosstermBackend,
+    style::{Color, Style, Stylize},
+    text::{Line, Span, Text},
+    widgets::{Block, Padding, Paragraph},
 };
 
 use crate::{
@@ -28,13 +31,16 @@ type InitializedTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 enum Command {
     SetMem,
-    DumpMem,
+    SetReg,
+    Reset,
     Run,
     RunUntil,
     RunSilent,
     RunSilentUntil,
     SetRunSpeed,
     MoveCursorTo,
+
+    ExecAsm,
 
     FollowCursor,
     Quit,
@@ -43,8 +49,7 @@ enum Command {
 add_info! {
     Command Result<&'static str, CommandError> {
         name => {
-            Command::SetMem => Ok("set"),
-            Command::DumpMem => Ok("dump")
+            Command::SetMem => Ok("set")
         }
         description => {
             Command::SetMem => Ok("Desc")
@@ -56,7 +61,9 @@ add_find_by! {
     Command Result<Command, CommandError>{
         name<&str> => {
             "setmem" => Ok(Command::SetMem),
-            "dumpmem" => Ok(Command::DumpMem),
+            "setreg" => Ok(Command::SetReg),
+            "reset" => Ok(Command::Reset),
+
             "run" => Ok(Command::Run),
             "run_until" => Ok(Command::RunUntil),
             "run_silent" => Ok(Command::RunSilent),
@@ -64,6 +71,7 @@ add_find_by! {
             "set_run_speed" => Ok(Command::SetRunSpeed),
             "follow" => Ok(Command::FollowCursor),
             "move" | "mov" => Ok(Command::MoveCursorTo),
+            "exec" | "asm" => Ok(Command::ExecAsm),
 
             "q" | "quit" => Ok(Command::Quit)
         }
@@ -73,14 +81,72 @@ add_find_by! {
 add_parse_executor! {
     Command (args &[&str], tracer &mut Tracer) Result<(), CommandError> {
         Command::SetMem => {
+            if args.len() > 2 {
+                let target_addr_arg = args.first().unwrap();
+                let data_args = &args[1..];
+
+                let target_addr = parse_addr_argument(tracer, target_addr_arg).map_err(|_e| CommandError::InvalidArgument)?;
+
+                // that's some junk, but it works
+                return data_args.iter().enumerate().fold(Ok(()), |_, (index, data)| {
+                    if target_addr as usize + index > u16::MAX as usize {
+                        return Err(CommandError::InvalidRange);
+                    }
+
+                    if let Ok(value) = parse_value_argument(data) &&
+                        let Some(cpu) = Rc::get_mut(&mut tracer.cpu) {
+                        if value <= u8::MAX as usize {
+                            cpu.memory.data[target_addr as usize + index] = value as u8;
+                        }
+                    }
+
+                    Ok(())
+                })
+            }
+            Ok(())
+        },
+
+        Command::SetReg => {
+            if args.len() == 2 {
+                let value = parse_value_argument(args[1]).map_err(|_e| CommandError::InvalidArgument)?;
+
+                if let Some(cpu) = Rc::get_mut(&mut tracer.cpu) {
+                    match args[0] {
+                        "pc" => {
+                            cpu.registers.program_counter = value.try_into().map_err(|_e| CommandError::InvalidArgument)?;
+                        }
+                        "sp" => {
+                            cpu.registers.stack_pointer = value.try_into().map_err(|_e| CommandError::InvalidArgument)?;
+                        }
+                        "a" => {
+                            cpu.registers.accumulator = value.try_into().map_err(|_e| CommandError::InvalidArgument)?;
+                        }
+                        "x" => {
+                            cpu.registers.x = value.try_into().map_err(|_e| CommandError::InvalidArgument)?;
+                        }
+                        "y" => {
+                            cpu.registers.y = value.try_into().map_err(|_e| CommandError::InvalidArgument)?;
+                        }
+
+                        _ => todo!("invalid registry")
+                    }
+                }
+            }
+
+            Ok(())
+        },
+
+        Command::Reset => {
+            if let Some(cpu) = Rc::get_mut(&mut tracer.cpu) {
+                cpu.reset();
+            }
+
             Ok(())
         },
 
         Command::Run => {
             if !args.is_empty() {
-                
                 let target_address_arg = args.first().unwrap();
-                
                 let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 tracer.running_predicate = Some(Box::new(move |tracer| {
@@ -103,9 +169,7 @@ add_parse_executor! {
 
         Command::RunUntil => {
             if !args.is_empty() {
-                
                 let target_address_arg = args.first().unwrap();
-                
                 let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 tracer.running_predicate = Some(Box::new(move |tracer| {
@@ -127,11 +191,9 @@ add_parse_executor! {
         },
 
         Command::RunSilent => {
-            if !args.is_empty() {    
+            if !args.is_empty() {
                 let target_address_arg = args.first().unwrap();
-
                 let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
-
                 tracer.running_predicate = Some(Box::new(move |tracer| {
                     let target_address = target_address;
 
@@ -205,6 +267,61 @@ add_parse_executor! {
             Ok(())
         },
 
+        Command::ExecAsm => {
+            if !args.is_empty() {
+                let strings = args.iter().fold(String::new(), |mut acc, x| {
+                    acc.push_str(x);
+                    acc.push(' ');
+                    acc
+                });
+
+                let instructions_strings = strings.split(";").collect::<Vec<&str>>();
+
+                let mut instructions: Vec<Instruction> = Vec::new();
+
+                for string in instructions_strings {
+                    let instruction = Instruction::try_from(string).map_err(|_e| CommandError::InvalidArgument)?;
+                    instructions.push(instruction);
+                }
+
+                if let Some(cpu) = Rc::get_mut(&mut tracer.cpu) {
+                    instructions.iter().try_for_each(|x| {
+                        cpu.run_instruction(*x).map(|_| ()).map_err(CommandError::FailedToExecute)?;
+
+                        if !tracer.registry_history.is_empty() {
+                            let last_entry = tracer.registry_history.last().unwrap();
+
+                            if (last_entry.status.bits() != cpu.registers.processor_status.bits())
+                                || (last_entry.a != cpu.registers.accumulator)
+                                || (last_entry.x != cpu.registers.x)
+                                || (last_entry.y != cpu.registers.y)
+                            {
+                                tracer.registry_history.push(ProcessorStatusHistoryEntry {
+                                    addr: 0xFFFF,
+                                    a: cpu.registers.accumulator,
+                                    x: cpu.registers.x,
+                                    y: cpu.registers.y,
+                                    status: cpu.registers.processor_status,
+                                });
+                            }
+                        } else {
+                            tracer.registry_history.push(ProcessorStatusHistoryEntry {
+                                addr: 0xFFFF,
+                                a: cpu.registers.accumulator,
+                                x: cpu.registers.x,
+                                y: cpu.registers.y,
+                                status: cpu.registers.processor_status,
+                            });
+                        }
+
+                        Ok(())
+                    })?
+                }
+            }
+
+            Ok(())
+        },
+
         Command::Quit => {
             tracer.current_state = States::Exit;
             Ok(())
@@ -231,6 +348,22 @@ fn parse_addr_argument(tracer: &Tracer, arg: &str) -> Result<u16, Box<dyn Error>
     } else {
         // TODO replace .unwrap() with check
         Ok(target_address_arg.parse::<u16>().unwrap())
+    }
+}
+
+fn parse_value_argument(arg: &str) -> Result<usize, Box<dyn Error>> {
+    let target_address_arg = arg;
+
+    if target_address_arg.starts_with("0x") {
+        if let Some(stripped) = target_address_arg.strip_prefix("0x") {
+            // TODO replace .unwrap() with check
+            Ok(usize::from_str_radix(stripped, 16).unwrap())
+        } else {
+            todo!("Couldn't parse argument")
+        }
+    } else {
+        // TODO replace .unwrap() with check
+        Ok(target_address_arg.parse::<usize>().unwrap())
     }
 }
 
@@ -366,7 +499,13 @@ pub enum States {
     Exit,
 }
 
-pub struct ProcessorStatusHistoryEntry(u16, ProcessorStatus);
+pub struct ProcessorStatusHistoryEntry {
+    addr: u16,
+    a: u8,
+    x: u8,
+    y: u8,
+    status: ProcessorStatus,
+}
 
 type CpuRunningPredicate = Option<Box<dyn Fn(&Tracer) -> bool>>;
 
@@ -381,7 +520,9 @@ pub struct Tracer {
     pub running_predicate: CpuRunningPredicate,
 
     pub commands_history: Vec<String>,
+    pub command_history_index_offset: usize,
     pub command_input: String,
+    pub command_error: Option<Box<dyn Error>>,
 
     pub active_area: Areas,
 
@@ -414,6 +555,9 @@ impl Tracer {
             is_cpu_paused: false,
             running_predicate: None,
             commands_history: vec![],
+            command_history_index_offset: 0,
+            command_error: None,
+
             registry_history: Vec::new(),
             active_area: Areas::Memory,
             current_state: States::Waiting,
@@ -478,14 +622,30 @@ impl Tracer {
             if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
                 if let Err(e) = cpu.once() {
                     todo!("Error occured during cpu run {e}")
-                } else if (self.registry_history.is_empty())
-                    || (self.registry_history.last().unwrap().1.bits()
-                        != self.cpu.registers.processor_status.bits())
-                {
-                    self.registry_history.push(ProcessorStatusHistoryEntry(
-                        self.cpu.registers.program_counter,
-                        self.cpu.registers.processor_status,
-                    ));
+                } else if !self.registry_history.is_empty() {
+                    let last_entry = self.registry_history.last().unwrap();
+
+                    if (last_entry.status.bits() != cpu.registers.processor_status.bits())
+                        || (last_entry.a != cpu.registers.accumulator)
+                        || (last_entry.x != cpu.registers.x)
+                        || (last_entry.y != cpu.registers.y)
+                    {
+                        self.registry_history.push(ProcessorStatusHistoryEntry {
+                            addr: cpu.registers.program_counter,
+                            a: cpu.registers.accumulator,
+                            x: cpu.registers.x,
+                            y: cpu.registers.y,
+                            status: cpu.registers.processor_status,
+                        });
+                    }
+                } else {
+                    self.registry_history.push(ProcessorStatusHistoryEntry {
+                        addr: cpu.registers.program_counter,
+                        a: cpu.registers.accumulator,
+                        x: cpu.registers.x,
+                        y: cpu.registers.y,
+                        status: cpu.registers.processor_status,
+                    });
                 }
             }
 
@@ -577,12 +737,71 @@ impl Tracer {
                     }
 
                     KeyCode::Enter => {
+                        if !self.commands_history.is_empty() {
+                            if self.commands_history.last().unwrap() != &self.command_input {
+                                self.commands_history.push(self.command_input.clone());
+                            }
+                        } else {
+                            self.commands_history.push(self.command_input.clone());
+                        }
+
                         let command = &self.command_input.clone()[1..]; // first is always ":"
 
-                        self.command_input = String::from("");
-                        self.current_state = States::Waiting;
+                        if let Err(e) = self.process_command(command) {
+                            self.command_input = String::from(":");
+                            self.command_error = Some(Box::new(e));
+                        } else {
+                            self.command_input = String::from("");
 
-                        self.process_command(command)?;
+                            if self.current_state == States::CommandInput {
+                                self.current_state = States::Waiting;
+                            }
+                        }
+
+                        self.command_history_index_offset = 0;
+                        Ok(())
+                    }
+
+                    KeyCode::Up => {
+                        if self.commands_history.is_empty() {
+                            return Ok(());
+                        }
+
+                        let max_index = self.commands_history.len() - 1;
+                        let checked_index = self.command_history_index_offset.checked_add(1);
+
+                        if let Some(mut offset) = checked_index {
+                            if offset > max_index + 1 {
+                                offset = max_index + 1;
+                            }
+
+                            self.command_input = self.commands_history.get(max_index - (offset - 1)).unwrap().clone();
+
+                            self.command_history_index_offset = offset;
+                        }
+
+                        Ok(())
+                    }
+
+                    KeyCode::Down => {
+                        if self.commands_history.is_empty() {
+                            return Ok(());
+                        }
+
+                        let max_index = self.commands_history.len() - 1;
+                        let checked_index = self.command_history_index_offset.checked_sub(1);
+
+                        if let Some(offset) = checked_index {
+                            if offset == 0 {
+                                self.command_input = ":".to_string();
+                                return Ok(());
+                            }
+
+                            self.command_input = self.commands_history.get(max_index - (offset - 1)).unwrap().clone();
+
+                            self.command_history_index_offset = offset;
+                        }
+
                         Ok(())
                     }
 
@@ -636,9 +855,16 @@ impl Tracer {
 
                         let [panels, command] = vertical_command.areas(f.area());
 
+                        let mut bottom_title_text = String::from("");
+
+                        if let Some(e) = &self.command_error {
+                            bottom_title_text = format!("{}", e);
+                        }
+
                         let command_block = Block::bordered()
                             .padding(Padding::horizontal(1))
-                            .title("Command");
+                            .title("Command")
+                            .title_bottom(bottom_title_text);
                         let command_content = Text::from(Span::from(&self.command_input));
                         f.render_widget(
                             Paragraph::new(command_content).block(command_block),
@@ -668,9 +894,10 @@ impl Tracer {
                 let disassembly_block = Block::bordered()
                     .padding(Padding::horizontal(1))
                     .title("Disassembly");
-                let disassembly_content = Text::from(
-                    self.build_disassembly_lines(disassembly_block.inner(disassembly).height as usize),
-                );
+                let disassembly_content =
+                    Text::from(self.build_disassembly_lines(
+                        disassembly_block.inner(disassembly).height as usize,
+                    ));
                 f.render_widget(
                     Paragraph::new(disassembly_content).block(disassembly_block),
                     disassembly,
@@ -691,7 +918,10 @@ impl Tracer {
                     "SP: {0} ({0:#06X}) PC: {1} ({1:#06X})",
                     self.cpu.registers.stack_pointer, self.cpu.registers.program_counter
                 );
-                let memory_title_bottom = format!("{:#0X}", self.memory_cursor_pos);
+                let memory_title_bottom = format!(
+                    "Bin: {0:#010b} Dec: {0:03} Addr:{1:#06X}",
+                    self.cpu.memory.data[self.memory_cursor_pos], self.memory_cursor_pos
+                );
                 let memory_block = Block::bordered()
                     .padding(Padding::horizontal(1))
                     .title("Memory")
@@ -724,6 +954,21 @@ impl Tracer {
 
         res.push(Line::from(vec![Span::from("CPU State: "), cpu_state_span]));
 
+        res.push(Line::from(
+            format!("PC: {0:#06X} ({0}) SP: {1:#06x} ({1})",
+                self.cpu.registers.program_counter,
+                self.cpu.registers.stack_pointer,
+            )
+        ));
+
+        res.push(Line::from(
+            format!("A: {0:#04X} ({0}) X: {1:#04X} ({1}) Y: {2:#04X} ({2})",
+                self.cpu.registers.accumulator,
+                self.cpu.registers.x,
+                self.cpu.registers.y,
+            )
+        ));
+
         res
     }
 
@@ -742,36 +987,38 @@ impl Tracer {
             let (first_index, _first_instruction) = chunk.first().unwrap();
             let (last_index, last_instruction) = chunk.last().unwrap();
 
-
             if !(first_index..&(last_index + last_instruction.get_code_size())).contains(&&pos) {
                 page += 1;
                 continue;
             }
 
-            lines = chunk.iter().enumerate().fold(
-                Vec::new(),
-                |mut acc, (index, (addr, inst))| {
-                let to;
+            lines = chunk
+                .iter()
+                .enumerate()
+                .fold(Vec::new(), |mut acc, (index, (addr, inst))| {
+                    let to;
 
-                if let Some(val) = self.parsed_instructions.get(page * count + index + 1) {
-                    to = val.0;
-                } else {
-                    to = usize::MAX;
-                }
+                    if let Some(val) = self.parsed_instructions.get(page * count + index + 1) {
+                        to = val.0;
+                    } else {
+                        to = usize::MAX;
+                    }
 
-                let is_pos_at_cursor = (*addr..to).contains(&self.memory_cursor_pos);
-                let is_pos_at_pc = (*addr..to).contains(&(self.cpu.registers.program_counter as usize));
-                let is_pos_at_stack = (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
+                    let is_pos_at_cursor = (*addr..to).contains(&self.memory_cursor_pos);
+                    let is_pos_at_pc =
+                        (*addr..to).contains(&(self.cpu.registers.program_counter as usize));
+                    let is_pos_at_stack =
+                        (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
-                let span: Span = Span::styled(
-                                format!("{0:#06X}    {1}", addr, inst),
-                                self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack)
-                            );
+                    let span: Span = Span::styled(
+                        format!("{0:#06X}    {1}", addr, inst),
+                        self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack),
+                    );
 
-                acc.push(Line::from(span));
+                    acc.push(Line::from(span));
 
-                acc
-            });
+                    acc
+                });
 
             break;
         }
@@ -781,19 +1028,22 @@ impl Tracer {
 
     fn build_registry_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
         self.registry_history.iter().fold(Vec::new(), |mut acc, reg| {
-            let string = format!("{:#06X} N: {} V: {} B: {} D: {} I: {} Z: {} C: {} ({:#010b} - {:03}) With B: ({:#010b} - {:03})",
-                reg.0,
-                reg.1.contains(ProcessorStatus::NegativeFlag) as u8,
-                reg.1.contains(ProcessorStatus::OverflowFlag) as u8,
-                reg.1.contains(ProcessorStatus::BreakCommand) as u8,
-                reg.1.contains(ProcessorStatus::DecimalMode) as u8,
-                reg.1.contains(ProcessorStatus::InterruptDisable) as u8,
-                reg.1.contains(ProcessorStatus::ZeroFlag) as u8,
-                reg.1.contains(ProcessorStatus::CarryFlag) as u8,
-                reg.1.bits() | 1 << 5,
-                reg.1.bits() | 1 << 5,
-                reg.1.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
-                reg.1.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
+            let string = format!("{:#06X} A: {} X: {} Y: {} N: {} V: {} B: {} D: {} I: {} Z: {} C: {} ({:#010b} - {:03}) With B: ({:#010b} - {:03})",
+                reg.addr,
+                reg.a,
+                reg.x,
+                reg.y,
+                reg.status.contains(ProcessorStatus::NegativeFlag) as u8,
+                reg.status.contains(ProcessorStatus::OverflowFlag) as u8,
+                reg.status.contains(ProcessorStatus::BreakCommand) as u8,
+                reg.status.contains(ProcessorStatus::DecimalMode) as u8,
+                reg.status.contains(ProcessorStatus::InterruptDisable) as u8,
+                reg.status.contains(ProcessorStatus::ZeroFlag) as u8,
+                reg.status.contains(ProcessorStatus::CarryFlag) as u8,
+                reg.status.bits() | 1 << 5,
+                reg.status.bits() | 1 << 5,
+                reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
+                reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
             );
 
             acc.push(Line::from(Span::from(string)));

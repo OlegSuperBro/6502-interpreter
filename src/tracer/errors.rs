@@ -4,6 +4,8 @@ use std::{error::Error, fmt::{Debug, Display}};
 pub enum CommandError {
     InvalidCommand,
     InvalidArgument,
+    FailedToExecute(Box<dyn Error>),
+    InvalidRange,
 }
 
 impl Display for CommandError {

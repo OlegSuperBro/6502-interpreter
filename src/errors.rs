@@ -14,7 +14,7 @@ impl Display for ParseError {
             ParseError::InvalidOpCodeGroup(byte) => write!(f, "Invalid OpCode group: {:b}", byte),
             ParseError::InvalidAddressingMode(byte) => write!(f, "Invalid addressing mode: {:b}", byte),
             ParseError::InvalidOpCode(label, byte) => write!(f, "Invalid OpCode. Label: {} Value: {}", label, byte),
-            ParseError::InvalidByteOpCode(byte) => write!(f, "Invalid byte for Opcode. Byte: {}", byte) 
+            ParseError::InvalidByteOpCode(byte) => write!(f, "Invalid byte for Opcode. Byte: {}", byte),
         }
     }
 }
