@@ -1,8 +1,6 @@
 #![allow(clippy::upper_case_acronyms)] // idk, uppercase instructions feels better for me
 
-use std::{error::Error, fmt::{Display, format, write}};
-
-use crate::errors::ParseError;
+use std::{error::Error, fmt::Display};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LoadOp {
@@ -329,32 +327,28 @@ impl AddressingMode {
             } else {
                 return Ok(Self::Absolute);
             }
-        } else {
-            if let Some(left) = val.split(",").collect::<Vec<&str>>().first() {
-                if left.len() > 2 {
-                    if val.ends_with(",X") {
-                        return Ok(Self::ZeroPageX);
-                    } else if val.ends_with(",Y") {
-                        return Ok(Self::ZeroPageY);
-                    }
-                } else {
-                    if val.starts_with("*+") {
-                        return Ok(Self::Relative);
-                    } else if val.starts_with("(") && val.ends_with(",X)") {
-                        return Ok(Self::IndexedIndirect);
-                    } else if val.starts_with("(") && val.ends_with("),Y") {
-                        return Ok(Self::IndirectIndexed);
-                    } else if val.starts_with("(") && val.ends_with(")") {
-                        return Ok(Self::Indirect)
-                    } else if val.ends_with(",X"){
-                        return Ok(Self::AbsoluteX);
-                    } else if val.ends_with(",Y"){
-                        return Ok(Self::AbsoluteY);
-                    }
+        } else if let Some(left) = val.split(",").collect::<Vec<&str>>().first() {
+            if left.len() > 2 {
+                if val.ends_with(",X") {
+                    return Ok(Self::ZeroPageX);
+                } else if val.ends_with(",Y") {
+                    return Ok(Self::ZeroPageY);
                 }
-            } else {
-                todo!("How in tf you got this?")
+            } else if val.starts_with("*+") {
+                return Ok(Self::Relative);
+            } else if val.starts_with("(") && val.ends_with(",X)") {
+                return Ok(Self::IndexedIndirect);
+            } else if val.starts_with("(") && val.ends_with("),Y") {
+                return Ok(Self::IndirectIndexed);
+            } else if val.starts_with("(") && val.ends_with(")") {
+                return Ok(Self::Indirect)
+            } else if val.ends_with(",X"){
+                return Ok(Self::AbsoluteX);
+            } else if val.ends_with(",Y"){
+                return Ok(Self::AbsoluteY);
             }
+        } else {
+            todo!("How in tf you got this?")
         }
 
         Ok(AddressingMode::Unknown)
@@ -383,12 +377,12 @@ impl TryFrom<&str> for Instruction {
         let opcode: OpCode = OpCode::from(&values.first().unwrap());
 
         if values.len() == 2 {
-            let addressing_mode = AddressingMode::check_addr_mode(&values[1])?;
-            let value = parse_value(addressing_mode, &values[1]);
+            let addressing_mode = AddressingMode::check_addr_mode(values[1])?;
+            let value = parse_value(addressing_mode, values[1]);
 
-            return Ok(Instruction { opcode, addressing_mode, value });
+            Ok(Instruction { opcode, addressing_mode, value })
         } else {
-            return  Ok(Instruction { opcode, addressing_mode: AddressingMode::Implicit, value: 0 });
+            Ok(Instruction { opcode, addressing_mode: AddressingMode::Implicit, value: 0 })
         }
 
     }
@@ -428,19 +422,19 @@ fn value_to_string(mode: AddressingMode, value: u16) -> String {
 
         AddressingMode::Accumulator => "A".into(),
 
-        AddressingMode::Immediate => format!("#${:02x}", value),
-        AddressingMode::ZeroPage => format!("${:02x}", value),
-        AddressingMode::ZeroPageX => format!("${:02x},X", value),
-        AddressingMode::ZeroPageY => format!("${:02x},Y", value),
-        AddressingMode::Relative => format!("*+{}", value),
+        AddressingMode::Immediate => format!("#${value:02x}"),
+        AddressingMode::ZeroPage => format!("${value:02x}"),
+        AddressingMode::ZeroPageX => format!("${value:02x},X"),
+        AddressingMode::ZeroPageY => format!("${value:02x},Y"),
+        AddressingMode::Relative => format!("*+{value}"),
 
-        AddressingMode::Indirect => format!("(${:04x})", value),
-        AddressingMode::IndexedIndirect => format!("(${:04x},X)", value),
-        AddressingMode::IndirectIndexed => format!("(${:04x}),Y", value),
+        AddressingMode::Indirect => format!("(${value:04x})"),
+        AddressingMode::IndexedIndirect => format!("(${value:04x},X)"),
+        AddressingMode::IndirectIndexed => format!("(${value:04x}),Y"),
 
-        AddressingMode::Absolute => format!("${:04x}", value),
-        AddressingMode::AbsoluteX => format!("${:04x},X", value),
-        AddressingMode::AbsoluteY => format!("${:04x},Y", value),
+        AddressingMode::Absolute => format!("${value:04x}"),
+        AddressingMode::AbsoluteX => format!("${value:04x},X"),
+        AddressingMode::AbsoluteY => format!("${value:04x},Y"),
     }
 }
 
@@ -472,9 +466,9 @@ fn parse_value<T: AsRef<str>>(addressing_mode: AddressingMode, string: T) -> u16
 fn process_value<T: AsRef<str>>(value: T) -> u16 {
     let value = value.as_ref();
 
-    if value.starts_with("$") {
-        return u16::from_str_radix(&value[1..], 16).unwrap()
+    if let Some(value) = value.strip_prefix("$") {
+        u16::from_str_radix(value, 16).unwrap()
     } else {
-        return value.parse::<u16>().unwrap();
+        value.parse::<u16>().unwrap()
     }
 }

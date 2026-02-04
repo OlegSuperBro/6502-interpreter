@@ -88,17 +88,16 @@ add_parse_executor! {
                 let target_addr = parse_addr_argument(tracer, target_addr_arg).map_err(|_e| CommandError::InvalidArgument)?;
 
                 // that's some junk, but it works
-                return data_args.iter().enumerate().fold(Ok(()), |_, (index, data)| {
+                return data_args.iter().enumerate().try_fold((), |_, (index, data)| {
                     if target_addr as usize + index > u16::MAX as usize {
                         return Err(CommandError::InvalidRange);
                     }
 
                     if let Ok(value) = parse_value_argument(data) &&
-                        let Some(cpu) = Rc::get_mut(&mut tracer.cpu) {
-                        if value <= u8::MAX as usize {
+                        let Some(cpu) = Rc::get_mut(&mut tracer.cpu)
+                        && value <= u8::MAX as usize {
                             cpu.memory.data[target_addr as usize + index] = value as u8;
                         }
-                    }
 
                     Ok(())
                 })
@@ -858,7 +857,7 @@ impl Tracer {
                         let mut bottom_title_text = String::from("");
 
                         if let Some(e) = &self.command_error {
-                            bottom_title_text = format!("{}", e);
+                            bottom_title_text = format!("{e}");
                         }
 
                         let command_block = Block::bordered()
@@ -1011,7 +1010,7 @@ impl Tracer {
                         (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
                     let span: Span = Span::styled(
-                        format!("{0:#06X}    {1}", addr, inst),
+                        format!("{addr:#06X}    {inst}"),
                         self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack),
                     );
 
@@ -1086,7 +1085,7 @@ impl Tracer {
                         address == 0x100 + self.cpu.registers.stack_pointer as usize;
 
                     let span: Span = Span::styled(
-                        format!("{:#04X}", val),
+                        format!("{val:#04X}"),
                         self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack),
                     );
 

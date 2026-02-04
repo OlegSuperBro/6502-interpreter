@@ -82,7 +82,7 @@ impl LowerHex for Rom {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -101,7 +101,7 @@ impl Binary for Rom {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -126,7 +126,7 @@ impl LowerHex for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -145,7 +145,7 @@ impl Binary for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -165,7 +165,7 @@ impl Debug for Memory {
             line.push('\n');
         }
 
-        write!(f, "{}", line)
+        write!(f, "{line}")
     }
 }
 
@@ -192,6 +192,8 @@ impl Debug for Registers {
             self.processor_status))
     }
 }
+
+#[allow(clippy::upper_case_acronyms)]
 struct CPU {
     memory: Memory,
     registers: Registers,
@@ -420,7 +422,7 @@ impl CPU {
                         self.registers.processor_status |= ProcessorStatus::BreakCommand;
 
                         let _ = self.set_value(AddressingMode::Absolute,
-                                0x0100 + (self.registers.stack_pointer + 0) as u16,
+                                0x0100 + self.registers.stack_pointer as u16,
                                 self.registers.processor_status.bits());
 
                         let _ = self.set_value(AddressingMode::Absolute,
@@ -624,12 +626,12 @@ impl CPU {
             }
         };
 
-        return Ok(can_add_offset);
+        Ok(can_add_offset)
     }
 
     fn get_single_value(&mut self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
         match self.get_value(mode, value) {
-            SingleOrDoubleValue::Single(x) => Ok(x as u8),
+            SingleOrDoubleValue::Single(x) => Ok(x),
             SingleOrDoubleValue::Double(_x) => todo!("Trying to get single value, got double instead with mode {mode:?}")
         }
     }
@@ -637,7 +639,7 @@ impl CPU {
     fn get_double_value(&mut self, mode: AddressingMode, value: u16) -> Result<u16, Box<dyn Error>> {
         match self.get_value(mode, value) {
             SingleOrDoubleValue::Single(_x) => todo!("Trying to get double value, got single instead with mode {mode:?}"),
-            SingleOrDoubleValue::Double(x) => Ok(x as u16)
+            SingleOrDoubleValue::Double(x) => Ok(x)
         }
     }
 
@@ -742,14 +744,14 @@ impl CPU {
     fn stack_push(&mut self, value: u8) {
         self.memory.data[0x100 + self.registers.stack_pointer as usize] = value;
         let _ = fs::write(format!("memdump/{} {:#X} - ps {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
-        
+
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_sub(1);
-        
+
     }
-    
+
     fn stack_pull(&mut self) -> u8 {
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_add(1);
-        
+
         let address = 0x100 + self.registers.stack_pointer as u16;
         let value = self.memory.data[address as usize];
         let _ = fs::write(format!("memdump/{} {:#X} - pl {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
@@ -851,11 +853,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             if STOP_EACH_INSTRUCTION {
                 let _ = io::stdin().read(&mut [0u8]);
             }
-            if STOP_ON_JUMP_INSTRUCTION {
-                if instruction.opcode == OpCode::JumpCall(instructions::JumpCallOp::JMP) {
+            if STOP_ON_JUMP_INSTRUCTION
+                && instruction.opcode == OpCode::JumpCall(instructions::JumpCallOp::JMP) {
                     let _ = io::stdin().read(&mut [0u8]);
                 }
-            }
         }
 
         if prev_address == cpu.registers.program_counter {
@@ -865,18 +866,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         prev_address = cpu.registers.program_counter;
     }
-
-    // let instructions = parser::parse_bin(data.as_slice())?;
-
-    // for instruction in instructions {
-    //     println!("{instruction:?}");
-
-    //     cpu.run_instruction(instruction);
-
-    //     let reg = &cpu.registers;
-    //     println!("{reg:?}");
-    //     let _ = io::stdin().read(&mut [0u8]);
-    // }
-
-    Ok(())
 }

@@ -11,10 +11,10 @@ pub enum ParseError {
 impl Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::InvalidOpCodeGroup(byte) => write!(f, "Invalid OpCode group: {:b}", byte),
-            ParseError::InvalidAddressingMode(byte) => write!(f, "Invalid addressing mode: {:b}", byte),
-            ParseError::InvalidOpCode(label, byte) => write!(f, "Invalid OpCode. Label: {} Value: {}", label, byte),
-            ParseError::InvalidByteOpCode(byte) => write!(f, "Invalid byte for Opcode. Byte: {}", byte),
+            ParseError::InvalidOpCodeGroup(byte) => write!(f, "Invalid OpCode group: {byte:b}"),
+            ParseError::InvalidAddressingMode(byte) => write!(f, "Invalid addressing mode: {byte:b}"),
+            ParseError::InvalidOpCode(label, byte) => write!(f, "Invalid OpCode. Label: {label} Value: {byte}"),
+            ParseError::InvalidByteOpCode(byte) => write!(f, "Invalid byte for Opcode. Byte: {byte}"),
         }
     }
 }
