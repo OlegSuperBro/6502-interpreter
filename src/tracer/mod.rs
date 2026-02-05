@@ -343,7 +343,7 @@ fn parse_addr_argument(tracer: &Tracer, arg: &str) -> Result<u16, Box<dyn Error>
     } else if target_address_arg == "pc" {
         Ok(tracer.cpu.registers.program_counter)
     } else if target_address_arg == "sp" {
-        Ok(tracer.cpu.registers.stack_pointer as u16)
+        Ok(0x0100 + tracer.cpu.registers.stack_pointer as u16)
     } else {
         // TODO replace .unwrap() with check
         Ok(target_address_arg.parse::<u16>().unwrap())
@@ -412,7 +412,7 @@ add_find_by! {
 add_parse_executor! {
     Hotkeys (tracer &mut Tracer) Result<(), HotkeyError> {
         Hotkeys::InputCommand => {
-            tracer.current_state = States::CommandInput;
+            tracer.is_inputting_command = true;
             tracer.command_input = String::from(":");
             Ok(())
         },
@@ -493,7 +493,6 @@ pub enum Areas {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum States {
     Waiting,
-    CommandInput,
     RunningSilent,
     Exit,
 }
@@ -522,6 +521,7 @@ pub struct Tracer {
     pub command_history_index_offset: usize,
     pub command_input: String,
     pub command_error: Option<Box<dyn Error>>,
+    pub is_inputting_command: bool,
 
     pub active_area: Areas,
 
@@ -556,6 +556,7 @@ impl Tracer {
             commands_history: vec![],
             command_history_index_offset: 0,
             command_error: None,
+            is_inputting_command: false,
 
             registry_history: Vec::new(),
             active_area: Areas::Memory,
@@ -612,8 +613,10 @@ impl Tracer {
         if self.current_state == States::Exit {
             return Ok(false);
         }
-        if self.current_state != States::RunningSilent {
-            self.process_inputs()?;
+
+        let had_inputs = self.process_inputs()?;
+
+        if had_inputs || (self.current_state != States::RunningSilent) {
             self.draw()?;
         }
 
@@ -621,23 +624,30 @@ impl Tracer {
             if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
                 if let Err(e) = cpu.once() {
                     todo!("Error occured during cpu run {e}")
-                } else if !self.registry_history.is_empty() {
-                    let last_entry = self.registry_history.last().unwrap();
+                }
+            }
 
-                    if (last_entry.status.bits() != cpu.registers.processor_status.bits())
-                        || (last_entry.a != cpu.registers.accumulator)
-                        || (last_entry.x != cpu.registers.x)
-                        || (last_entry.y != cpu.registers.y)
-                    {
-                        self.registry_history.push(ProcessorStatusHistoryEntry {
-                            addr: cpu.registers.program_counter,
-                            a: cpu.registers.accumulator,
-                            x: cpu.registers.x,
-                            y: cpu.registers.y,
-                            status: cpu.registers.processor_status,
-                        });
-                    }
-                } else {
+            if let Some(predicate) = &self.running_predicate
+                && !predicate(self)
+            {
+                self.is_cpu_running = false;
+                self.running_predicate = None;
+
+                if self.current_state == States::RunningSilent {
+                    self.current_state = States::Waiting;
+                }
+            }
+        }
+
+        if let Some(cpu) = Rc::get_mut(&mut self.cpu) {
+            if !self.registry_history.is_empty() {
+                let last_entry = self.registry_history.last().unwrap();
+
+                if (last_entry.status.bits() != cpu.registers.processor_status.bits())
+                    || (last_entry.a != cpu.registers.accumulator)
+                    || (last_entry.x != cpu.registers.x)
+                    || (last_entry.y != cpu.registers.y)
+                {
                     self.registry_history.push(ProcessorStatusHistoryEntry {
                         addr: cpu.registers.program_counter,
                         a: cpu.registers.accumulator,
@@ -646,18 +656,17 @@ impl Tracer {
                         status: cpu.registers.processor_status,
                     });
                 }
-            }
-
-            if let Some(predicate) = &self.running_predicate
-                && !predicate(self)
-            {
-                self.is_cpu_running = false;
-
-                if self.current_state == States::RunningSilent {
-                    self.current_state = States::Waiting;
-                }
+            } else {
+                self.registry_history.push(ProcessorStatusHistoryEntry {
+                    addr: cpu.registers.program_counter,
+                    a: cpu.registers.accumulator,
+                    x: cpu.registers.x,
+                    y: cpu.registers.y,
+                    status: cpu.registers.processor_status,
+                });
             }
         }
+
         Ok(true)
     }
 
@@ -665,19 +674,17 @@ impl Tracer {
         self.draw()
     }
 
-    fn process_inputs(&mut self) -> Result<(), TracerError> {
+    fn process_inputs(&mut self) -> Result<bool, TracerError> {
         if let Ok(res) = crossterm::event::poll(Duration::from_nanos(1))
             && !res
         {
-            return Ok(());
+            return Ok(false);
         }
 
-        match self.current_state {
-            States::Waiting => self.process_hotkey(),
-
-            States::CommandInput => self.process_command_input(),
-
-            _ => Ok(()),
+        if self.is_inputting_command {
+            self.process_command_input().map(|_v| true)
+        } else {
+            self.process_hotkey().map(|_v| true)
         }
     }
 
@@ -700,23 +707,9 @@ impl Tracer {
     }
 
     fn process_key(&mut self, key_event: KeyEvent) -> Result<(), TracerError> {
-        match self.current_state {
-            States::Waiting => {
-                let hotkey =
-                    Hotkeys::find_by_code(&key_event.code).map_err(TracerError::HotkeyError)?;
+        let hotkey = Hotkeys::find_by_code(&key_event.code).map_err(TracerError::HotkeyError)?;
 
-                Hotkeys::parse_and_run(&hotkey, self).map_err(TracerError::HotkeyError)?;
-            }
-
-            States::CommandInput => {
-                if self.command_input.is_empty() {
-                    self.current_state = States::Waiting;
-                    return Ok(());
-                }
-            }
-            _ => todo!(),
-        }
-
+        Hotkeys::parse_and_run(&hotkey, self).map_err(TracerError::HotkeyError)?;
         Ok(())
     }
 
@@ -729,7 +722,7 @@ impl Tracer {
                             self.command_input[0..self.command_input.len() - 1].to_string();
 
                         if self.command_input.is_empty() {
-                            self.current_state = States::Waiting;
+                            self.is_inputting_command = false;
                         }
 
                         Ok(())
@@ -752,9 +745,7 @@ impl Tracer {
                         } else {
                             self.command_input = String::from("");
 
-                            if self.current_state == States::CommandInput {
-                                self.current_state = States::Waiting;
-                            }
+                            self.is_inputting_command = false;
                         }
 
                         self.command_history_index_offset = 0;
@@ -848,34 +839,31 @@ impl Tracer {
             .draw(|f| {
                 use ratatui::layout::Constraint::{Fill, Length};
 
-                let parent: Rect = match self.current_state {
-                    States::CommandInput => {
-                        let vertical_command = Layout::vertical([Fill(1), Length(3)]);
+                let parent: Rect = if self.is_inputting_command {
+                    let vertical_command = Layout::vertical([Fill(1), Length(3)]);
 
-                        let [panels, command] = vertical_command.areas(f.area());
+                    let [panels, command] = vertical_command.areas(f.area());
 
-                        let mut bottom_title_text = String::from("");
+                    let mut bottom_title_text = String::from("");
 
-                        if let Some(e) = &self.command_error {
-                            bottom_title_text = format!("{e}");
-                        }
-
-                        let command_block = Block::bordered()
-                            .padding(Padding::horizontal(1))
-                            .title("Command")
-                            .title_bottom(bottom_title_text);
-                        let command_content = Text::from(Span::from(&self.command_input));
-                        f.render_widget(
-                            Paragraph::new(command_content).block(command_block),
-                            command,
-                        );
-
-                        panels
+                    if let Some(e) = &self.command_error {
+                        bottom_title_text = format!("{e}");
                     }
-                    _ => f.area(),
-                };
 
-                let horizontal = Layout::horizontal([Fill(1), Fill(3)]);
+                    let command_block = Block::bordered()
+                        .padding(Padding::horizontal(1))
+                        .title("Command")
+                        .title_bottom(bottom_title_text);
+                    let command_content = Text::from(Span::from(&self.command_input));
+                    f.render_widget(
+                        Paragraph::new(command_content).block(command_block),
+                        command,
+                    );
+
+                    panels
+                } else { f.area() };
+
+                let horizontal = Layout::horizontal([Fill(2), Fill(5)]);
                 let [left_area, right_area] = horizontal.areas(parent);
 
                 let vertical = Layout::vertical([Length(5), Fill(1)]);
@@ -906,7 +894,7 @@ impl Tracer {
                     .padding(Padding::horizontal(1))
                     .title("Registry");
                 let registry_content = Text::from(
-                    self.build_registry_lines(registry_block.inner(parent).height as usize),
+                    self.build_registry_lines(registry_block.inner(registry).height as usize),
                 );
                 f.render_widget(
                     Paragraph::new(registry_content).block(registry_block),
@@ -954,14 +942,14 @@ impl Tracer {
         res.push(Line::from(vec![Span::from("CPU State: "), cpu_state_span]));
 
         res.push(Line::from(
-            format!("PC: {0:#06X} ({0}) SP: {1:#06x} ({1})",
+            format!("PC: {0:#06X} ({0:05}) SP: {1:#04x} ({1:03})",
                 self.cpu.registers.program_counter,
                 self.cpu.registers.stack_pointer,
             )
         ));
 
         res.push(Line::from(
-            format!("A: {0:#04X} ({0}) X: {1:#04X} ({1}) Y: {2:#04X} ({2})",
+            format!("A: {0:#04X} ({0:03}) X: {1:#04X} ({1:03}) Y: {2:#04X} ({2:03})",
                 self.cpu.registers.accumulator,
                 self.cpu.registers.x,
                 self.cpu.registers.y,
@@ -1026,29 +1014,35 @@ impl Tracer {
     }
 
     fn build_registry_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
-        self.registry_history.iter().fold(Vec::new(), |mut acc, reg| {
-            let string = format!("{:#06X} A: {} X: {} Y: {} N: {} V: {} B: {} D: {} I: {} Z: {} C: {} ({:#010b} - {:03}) With B: ({:#010b} - {:03})",
-                reg.addr,
-                reg.a,
-                reg.x,
-                reg.y,
-                reg.status.contains(ProcessorStatus::NegativeFlag) as u8,
-                reg.status.contains(ProcessorStatus::OverflowFlag) as u8,
-                reg.status.contains(ProcessorStatus::BreakCommand) as u8,
-                reg.status.contains(ProcessorStatus::DecimalMode) as u8,
-                reg.status.contains(ProcessorStatus::InterruptDisable) as u8,
-                reg.status.contains(ProcessorStatus::ZeroFlag) as u8,
-                reg.status.contains(ProcessorStatus::CarryFlag) as u8,
-                reg.status.bits() | 1 << 5,
-                reg.status.bits() | 1 << 5,
-                reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
-                reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
-            );
+        if let Some(stripped) = self.registry_history.get(
+                self.registry_history.len() - count.min(self.registry_history.len())..self.registry_history.len()
+            ) {
+                return stripped.iter().fold(Vec::new(), |mut acc, reg| {
+                    let string = format!("{:#06X} A: {:03} X: {:03} Y: {:03} N: {} V: {} B: {} D: {} I: {} Z: {} C: {} ({:#010b} - {:03}) With B: ({:#010b} - {:03})",
+                        reg.addr,
+                        reg.a,
+                        reg.x,
+                        reg.y,
+                        reg.status.contains(ProcessorStatus::NegativeFlag) as u8,
+                        reg.status.contains(ProcessorStatus::OverflowFlag) as u8,
+                        reg.status.contains(ProcessorStatus::BreakCommand) as u8,
+                        reg.status.contains(ProcessorStatus::DecimalMode) as u8,
+                        reg.status.contains(ProcessorStatus::InterruptDisable) as u8,
+                        reg.status.contains(ProcessorStatus::ZeroFlag) as u8,
+                        reg.status.contains(ProcessorStatus::CarryFlag) as u8,
+                        reg.status.bits() | 1 << 5,
+                        reg.status.bits() | 1 << 5,
+                        reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
+                        reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
+                    );
 
-            acc.push(Line::from(Span::from(string)));
+                    acc.push(Line::from(Span::from(string)));
 
-            acc
-        })
+                    acc
+                });
+        }
+
+        vec![]
     }
 
     fn build_memory_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
@@ -1113,6 +1107,8 @@ impl Tracer {
             Style::default().bg(Color::White).fg(Color::Black)
         } else if on_pc {
             Style::default().fg(Color::Blue)
+        } else if on_stack {
+            Style::default().fg(Color::Red)
         } else {
             Style::default()
         }
