@@ -15,7 +15,7 @@ use ratatui::{
 
 use crate::{
     CPU, ProcessorStatus,
-    instructions::{self, Instruction, OpCode},
+    instructions::{self, AddressingMode, Instruction, JumpCallOp, OpCode},
     parser::parse_instruction,
     tracer::errors::{CommandError, HotkeyError},
 };
@@ -1007,6 +1007,14 @@ impl Tracer {
 
                             format!("({result_address:#06X})")
                         }
+
+                        OpCode::JumpCall(JumpCallOp::JMP) => {
+                                if inst.addressing_mode == AddressingMode::Indirect {
+                                    format!("({:#04X}{:02X})", self.cpu.memory.data[inst.value.wrapping_add(1) as usize], self.cpu.memory.data[inst.value as usize])
+                                } else {
+                                    String::from("")
+                                }
+                            }
 
                         _ => String::from("")
                     };

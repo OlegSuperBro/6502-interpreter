@@ -293,7 +293,7 @@ impl<T: AsRef<str>> From<T> for OpCode {
 }
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddressingMode {
     Implicit,
     Accumulator,
