@@ -426,7 +426,7 @@ fn value_to_string(mode: AddressingMode, value: u16) -> String {
         AddressingMode::ZeroPage => format!("${value:02x}"),
         AddressingMode::ZeroPageX => format!("${value:02x},X"),
         AddressingMode::ZeroPageY => format!("${value:02x},Y"),
-        AddressingMode::Relative => format!("*+{value}"),
+        AddressingMode::Relative => if value as i8 > 0 {format!("*+{}", value as i8)} else {format!("*{}", value as i8)},
 
         AddressingMode::Indirect => format!("(${value:04x})"),
         AddressingMode::IndexedIndirect => format!("(${value:04x},X)"),

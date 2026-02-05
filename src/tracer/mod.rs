@@ -15,7 +15,7 @@ use ratatui::{
 
 use crate::{
     CPU, ProcessorStatus,
-    instructions::{self, Instruction},
+    instructions::{self, Instruction, OpCode},
     parser::parse_instruction,
     tracer::errors::{CommandError, HotkeyError},
 };
@@ -191,12 +191,12 @@ add_parse_executor! {
 
         Command::RunSilent => {
             if !args.is_empty() {
-                let target_address_arg = args.first().unwrap();
-                let target_address = parse_addr_argument(tracer, target_address_arg).map_err(|_e| CommandError::InvalidArgument)?;
-                tracer.running_predicate = Some(Box::new(move |tracer| {
-                    let target_address = target_address;
+                let target_address: u16 = parse_addr_argument(tracer, args.first().unwrap()).map_err(|_e| CommandError::InvalidArgument)?;
 
+                tracer.running_predicate = Some(Box::new(move |tracer| {
                     let pc = tracer.cpu.registers.program_counter;
+
+                    let target_address = pc + target_address;
 
                     if pc >= target_address {
                         return false;
@@ -204,11 +204,9 @@ add_parse_executor! {
 
                     true
                 }));
-
-                tracer.current_state = States::RunningSilent;
             }
 
-
+            tracer.current_state = States::RunningSilent;
             tracer.is_cpu_running = true;
             Ok(())
         },
@@ -229,11 +227,13 @@ add_parse_executor! {
                     true
                 }));
                 tracer.current_state = States::RunningSilent;
+                tracer.is_cpu_running = true;
+
+                return Ok(());
             }
 
 
-            tracer.is_cpu_running = true;
-            Ok(())
+            Err(CommandError::InvalidArgument)
         },
 
         Command::FollowCursor => {
@@ -997,8 +997,22 @@ impl Tracer {
                     let is_pos_at_stack =
                         (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
+                    let optional_text = match inst.opcode {
+                        OpCode::Branch(_) => {
+                            let result_address= if inst.value as i8 > 0 {
+                                addr.wrapping_add(2).wrapping_add(inst.value as usize)
+                            } else {
+                                addr.wrapping_add(2).wrapping_sub((inst.value as i8).unsigned_abs() as usize)
+                            };
+
+                            format!("({result_address:#06X})")
+                        }
+
+                        _ => String::from("")
+                    };
+
                     let span: Span = Span::styled(
-                        format!("{addr:#06X}    {inst}"),
+                        format!("{addr:#06X}    {inst} {optional_text}"),
                         self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack),
                     );
 
