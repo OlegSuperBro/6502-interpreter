@@ -126,8 +126,11 @@ fn parse_opcode(byte: &u8, group: &OpCodeGroup) -> Result<OpCode, ParseError> {
         OpCodeGroup::Group3 =>
             match opcode_byte {
                 0b001 => Ok(OpCode::Logical(LogicOp::BIT)),
-                0b010 => Ok(OpCode::JumpCall(JumpCallOp::JMP)),
-                0b011 => Ok(OpCode::JumpCall(JumpCallOp::JMP)),
+
+                // Addressing mode for both jumps should be handled manually
+                0b010 => Ok(OpCode::JumpCall(JumpCallOp::JMP)), // this JMP is indirect
+                0b011 => Ok(OpCode::JumpCall(JumpCallOp::JMP)), // this JMP is absolute
+
                 0b100 => Ok(OpCode::Load(LoadOp::STY)),
                 0b101 => Ok(OpCode::Load(LoadOp::LDY)),
                 0b110 => Ok(OpCode::Arithmetic(ArithmeticOp::CPY)),
@@ -191,8 +194,15 @@ fn parse_other_opcode(byte: &u8) -> Option<OpCode> {
 
 fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result<AddressingMode, ParseError> {
     // don't ask. i have no clue why this exist.
-    if opcode == &OpCode::JumpCall(JumpCallOp::JMP) && group == &OpCodeGroup::Group3 {
-        return Ok(AddressingMode::Absolute);
+    if opcode == &OpCode::JumpCall(JumpCallOp::JMP) {
+        let masked_byte = (byte & 0b11100000) >> 5;
+
+        return match masked_byte {
+            0b010 => Ok(AddressingMode::Absolute),
+            0b011 => Ok(AddressingMode::Indirect),
+
+            _ => todo!("address_mode jmp handler How in tf you got here? {0:#010b}, {1:#010b}", byte, masked_byte)
+        };
     }
 
     let opcode_mode = (byte & 0b00011100) >> 2;
@@ -234,7 +244,10 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
         OpCodeGroup::BranchGroup => Ok(AddressingMode::Relative), // all branch instructions realative only
 
         OpCodeGroup::OtherGroup => {
-            Ok(AddressingMode::Implicit)
+            match opcode {
+                OpCode::JumpCall(JumpCallOp::JSR) => Ok(AddressingMode::Absolute),
+                _ => Ok(AddressingMode::Implicit)
+            }
         }
     }
 }

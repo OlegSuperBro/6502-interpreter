@@ -11,7 +11,7 @@ mod tracer;
 
 // Currently only used when running https://github.com/Klaus2m5/6502_65C02_functional_tests only because there some thing we need to do, to run tests properly
 const RUNNING_TEST: bool = true;
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 const STOP_EACH_INSTRUCTION: bool = false;
 const STOP_ON_JUMP_INSTRUCTION: bool = false;
 
@@ -226,6 +226,9 @@ impl CPU {
         let mode = instruction.addressing_mode;
         let value = instruction.value;
 
+        
+        let mask_zn = ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag;
+
         match instruction.opcode {
             OpCode::Load(op) => {
                 match op {
@@ -239,10 +242,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.accumulator = value;
                     }
 
@@ -256,10 +259,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.x = value;
                     }
 
@@ -273,10 +276,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.y = value;
                     }
 
@@ -287,6 +290,14 @@ impl CPU {
                                     self.registers.accumulator)
                                     .inspect_err(|_e| panic!("Failed to set value"));
                     }
+
+                    instructions::LoadOp::STX => {
+                        let _ = self.set_value(
+                                    mode,
+                                    value,
+                                    self.registers.x)
+                                    .inspect_err(|_e| panic!("Failed to set value"));
+                    }
                     _ => {
                         todo!("WIP1 {op:?}")
                     }
@@ -295,6 +306,8 @@ impl CPU {
             OpCode::Arithmetic(op) => {
                 match op {
                     instructions::ArithmeticOp::ADC => {
+                        let mask = ProcessorStatus::CarryFlag | ProcessorStatus::ZeroFlag | ProcessorStatus::OverflowFlag | ProcessorStatus::NegativeFlag;
+
                         let old_accumulator = self.registers.accumulator;
 
                         let value = self.get_single_value(mode, value)?;
@@ -307,8 +320,9 @@ impl CPU {
                                 Some(old_accumulator),
                                 Some(operand),
                                 &final_result,
-                                Some(ProcessorStatus::CarryFlag | ProcessorStatus::ZeroFlag | ProcessorStatus::OverflowFlag | ProcessorStatus::NegativeFlag)
-                            )
+                                Some(mask)
+                            ),
+                            mask
                         );
                         self.registers.accumulator = final_result;
                     }
@@ -327,8 +341,9 @@ impl CPU {
                                 Some(old_value),
                                 Some(value),
                                 &new_value,
-                                Some(ProcessorStatus::ZeroFlag | ProcessorStatus::NegativeFlag)
-                            ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()}
+                                Some(mask_zn)
+                            ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()},
+                            mask_zn | ProcessorStatus::CarryFlag
                         );
                     }
                     instructions::ArithmeticOp::CPX => {
@@ -345,8 +360,10 @@ impl CPU {
                             Some(old_value),
                             Some(value),
                             &new_value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus::NegativeFlag)
-                        ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()});
+                            Some(mask_zn)
+                        ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()},
+                        mask_zn | ProcessorStatus::CarryFlag
+                    );
                     }
 
                     instructions::ArithmeticOp::CPY => {
@@ -360,8 +377,10 @@ impl CPU {
                             Some(old_value),
                             Some(value),
                             &new_value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus::NegativeFlag)
-                        ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()});
+                            Some(mask_zn)
+                        ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()},
+                        mask_zn | ProcessorStatus::CarryFlag
+                    );
                     }
                     _ => todo!("Arithmetic {op:?}")
                 }
@@ -375,7 +394,23 @@ impl CPU {
                         can_add_offset = false;
                     }
 
-                    _ => todo!("JumpCall")
+                    instructions::JumpCallOp::JSR => {
+                        let value = self.get_double_value(mode, value)?;
+
+                        let target = self.registers.program_counter.wrapping_add(2);
+
+                        self.stack_push(((target >> 8) & 0xFF) as u8);
+                        self.stack_push((target & 0xFF) as u8);
+
+                        self.registers.program_counter = value;
+
+                        can_add_offset = false;
+                    }
+
+                    instructions::JumpCallOp::RTS => {
+                        self.registers.program_counter = ((self.stack_pull() as u16) + ((self.stack_pull() as u16) << 8)).wrapping_add(1);
+                        can_add_offset = false;
+                    }
                 }
             }
             OpCode::Stack(op) => {
@@ -387,9 +422,9 @@ impl CPU {
                     instructions::StackOp::TSX => {
                         self.registers.x = self.registers.stack_pointer;
 
-                        let flags = CPU::get_flags(None, None, &self.registers.x, Some(ProcessorStatus::ZeroFlag | ProcessorStatus::NegativeFlag));
+                        let flags = CPU::get_flags(None, None, &self.registers.x, Some(mask_zn));
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                     }
 
                     instructions::StackOp::PHA => {
@@ -399,9 +434,9 @@ impl CPU {
                     instructions::StackOp::PLA => {
                         self.registers.accumulator = self.stack_pull();
 
-                        let flags = CPU::get_flags(None, None, &self.registers.accumulator, Some(ProcessorStatus::ZeroFlag | ProcessorStatus::NegativeFlag));
+                        let flags = CPU::get_flags(None, None, &self.registers.accumulator, Some(mask_zn));
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                     }
 
                     instructions::StackOp::PHP => {
@@ -412,26 +447,30 @@ impl CPU {
 
                     instructions::StackOp::PLP => {
                         let flags = ProcessorStatus::from_bits_truncate(self.stack_pull());
-                        self.set_flags(flags);
+                        self.set_flags(flags, ProcessorStatus::all());
                     }
                 }
             }
             OpCode::SystemFunc(op) => {
                 match op {
                     instructions::SystemFuncOp::BRK => {
-                        self.registers.processor_status |= ProcessorStatus::BreakCommand;
+                        // there's bug in 6502 that makes "BRK" instruction "2 byte" long, when 2nd byte is ignored in any way.
+                        // It was actually cool that some programs used this
+                        self.stack_push((self.registers.program_counter.wrapping_add(2) >> 8) as u8);
+                        self.stack_push((self.registers.program_counter.wrapping_add(2) & 0xFF) as u8);
+                        self.stack_push((self.registers.processor_status | ProcessorStatus::BreakCommand).bits() | 1 << 5);
 
-                        let _ = self.set_value(AddressingMode::Absolute,
-                                0x0100 + self.registers.stack_pointer as u16,
-                                self.registers.processor_status.bits());
+                        self.registers.program_counter = (self.memory.data[0xFFFE] as u16) + ((self.memory.data[0xFFFF] as u16) << 8);
 
-                        let _ = self.set_value(AddressingMode::Absolute,
-                                0x0100 + (self.registers.stack_pointer + 1) as u16,
-                                (self.registers.program_counter & 0xFF) as u8);
+                        self.set_flags(ProcessorStatus::InterruptDisable, ProcessorStatus::InterruptDisable);
 
-                        let _ = self.set_value(AddressingMode::Absolute,
-                            0x0100 + (self.registers.stack_pointer + 2) as u16,
-                            (self.registers.program_counter >> 8) as u8);
+                        can_add_offset = false;
+                    }
+
+                    instructions::SystemFuncOp::RTI => {
+                        self.registers.processor_status = ProcessorStatus::from_bits_truncate(self.stack_pull());
+                        self.registers.program_counter = (self.stack_pull() as u16) + ((self.stack_pull() as u16) << 8);
+                        can_add_offset = false;
                     }
 
                     instructions::SystemFuncOp::NOP => {}
@@ -447,6 +486,14 @@ impl CPU {
 
                     instructions::StatusFlagOp::CLC => {
                         self.registers.processor_status &= !ProcessorStatus::CarryFlag
+                    }
+
+                    instructions::StatusFlagOp::CLI => {
+                        self.registers.processor_status |= ProcessorStatus::InterruptDisable
+                    }
+
+                    instructions::StatusFlagOp::SEC => {
+                        self.registers.processor_status |= ProcessorStatus::CarryFlag
                     }
 
                     _ => todo!("run status flag {op:?}")
@@ -520,10 +567,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.x = value;
                     },
                     instructions::IncDecOp::DEY => {
@@ -533,12 +580,39 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.y = value;
                     },
+                    instructions::IncDecOp::INX => {
+                        let value = self.registers.x.wrapping_add(1);
+
+                        let flags = CPU::get_flags(
+                            Some(self.registers.accumulator),
+                            None,
+                            &value,
+                            Some(mask_zn)
+                        );
+
+                        self.set_flags(flags, mask_zn);
+                        self.registers.x = value;
+                    },
+                    instructions::IncDecOp::INY => {
+                        let value = self.registers.y.wrapping_add(1);
+
+                        let flags = CPU::get_flags(
+                            Some(self.registers.accumulator),
+                            None,
+                            &value,
+                            Some(mask_zn)
+                        );
+
+                        self.set_flags(flags, mask_zn);
+                        self.registers.y = value;
+                    }
+
                     _ => todo!("run IncDec {op:?}")
                 }
             }
@@ -551,10 +625,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.accumulator = value;
                     }
 
@@ -565,10 +639,10 @@ impl CPU {
                             Some(self.registers.y),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.y = value;
                     }
 
@@ -579,10 +653,10 @@ impl CPU {
                             Some(self.registers.x),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.x = value;
                     }
 
@@ -593,10 +667,10 @@ impl CPU {
                             Some(self.registers.accumulator),
                             None,
                             &value,
-                            Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                            Some(mask_zn)
                         );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
                         self.registers.accumulator = value;
                     }
                 }
@@ -610,12 +684,28 @@ impl CPU {
 
                         let flags = CPU::get_flags(
                                 Some(self.registers.accumulator),
-                                None,
-                                &value,
-                                Some(ProcessorStatus::ZeroFlag | ProcessorStatus:: NegativeFlag)
+                                Some(value),
+                                &result,
+                                Some(mask_zn)
                             );
 
-                        self.set_flags(flags);
+                        self.set_flags(flags, mask_zn);
+                        self.registers.accumulator = result;
+                    }
+
+                    instructions::LogicOp::ORA => {
+                        let value = self.get_single_value(mode, value)?;
+
+                        let result = self.registers.accumulator | value;
+
+                        let flags = CPU::get_flags(
+                                Some(self.registers.accumulator),
+                                Some(value),
+                                &result,
+                                Some(mask_zn)
+                            );
+
+                        self.set_flags(flags, mask_zn);
                         self.registers.accumulator = result;
                     }
                     _ => todo!("run logical {op:?}")
@@ -683,17 +773,18 @@ impl CPU {
 
     fn set_value(&mut self, mode: AddressingMode, address: u16, value: u8) -> Result<(), Box<dyn Error>> {
         match mode {
-            AddressingMode::Absolute => {
+            AddressingMode::Absolute |
+            AddressingMode::ZeroPage => {
                 self.memory.data[address as usize] = value;
             }
-            _ => todo!("{mode:?}"),
+            _ => todo!("{:#06x} {mode:?}", self.registers.program_counter),
         }
 
         Ok(())
     }
 
-    fn set_flags(&mut self, flags: ProcessorStatus) {
-        self.registers.processor_status = flags & !ProcessorStatus::BreakCommand;
+    fn set_flags(&mut self, flags: ProcessorStatus, mask: ProcessorStatus) {
+        self.registers.processor_status = (self.registers.processor_status & !mask) | flags;
     }
 
     fn get_flags(prev_value: Option<u8>, operand: Option<u8>, result_value: &u8, mask: Option<ProcessorStatus>) -> ProcessorStatus {
@@ -793,6 +884,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     cpu.load_into_ram(&rom);
 
+    cpu.reset();
+
     if RUNNING_TEST {
         cpu.registers.program_counter = 0x0400
     }
@@ -826,12 +919,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    cpu.reset();
-
     let mut prev_address = 0u16;
 
     loop {
-        let (offset, instruction) = parse_instruction(cpu.registers.program_counter, &cpu.memory.data).inspect_err(|_x| eprintln!("Error during parsing"))?;
+        let (offset, instruction);
+        let res = parse_instruction(cpu.registers.program_counter, &cpu.memory.data).inspect_err(|_x| eprintln!("Error during parsing"));
+
+        if let Ok(values) = res {
+            (offset, instruction) = values
+        } else {
+            println!("----------------------------------");
+
+            let reg = &cpu.registers;
+            println!("Registry:\n{reg:?}");
+
+            // Some junk :)
+            res?;
+            return Ok(());
+        }
 
         if DEBUG {
             println!("----------------------------------");
@@ -841,8 +946,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Before:\n{reg:?}");
         }
 
-        if cpu.run_instruction(instruction)? {
-            cpu.registers.program_counter = cpu.registers.program_counter.wrapping_add(offset as u16);
+        let res = cpu.run_instruction(instruction);
+
+        if let Ok(increase) = res {
+            if increase {
+                cpu.registers.program_counter = cpu.registers.program_counter.wrapping_add(offset as u16);
+            }
+        } else {
+            println!("----------------------------------");
+            println!("{instruction:?}");
+
+            let reg = &cpu.registers;
+            println!("Registry:\n{reg:?}");
+
+            res?;
         }
 
         if DEBUG {

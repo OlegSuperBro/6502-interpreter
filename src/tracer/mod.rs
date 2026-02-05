@@ -997,8 +997,8 @@ impl Tracer {
                     let is_pos_at_stack =
                         (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
-                    let optional_text = match inst.opcode {
-                        OpCode::Branch(_) => {
+                    let optional_text = match inst.addressing_mode {
+                        AddressingMode::Relative => {
                             let result_address= if inst.value as i8 > 0 {
                                 addr.wrapping_add(2).wrapping_add(inst.value as usize)
                             } else {
@@ -1008,13 +1008,13 @@ impl Tracer {
                             format!("({result_address:#06X})")
                         }
 
-                        OpCode::JumpCall(JumpCallOp::JMP) => {
-                                if inst.addressing_mode == AddressingMode::Indirect {
-                                    format!("({:#04X}{:02X})", self.cpu.memory.data[inst.value.wrapping_add(1) as usize], self.cpu.memory.data[inst.value as usize])
-                                } else {
-                                    String::from("")
-                                }
-                            }
+                        AddressingMode::Indirect => {
+                            format!("({:#04X}{:02X})", self.cpu.memory.data[inst.value.wrapping_add(1) as usize], self.cpu.memory.data[inst.value as usize])
+                        }
+
+                        AddressingMode::AbsoluteX => {
+                            format!("({:#04X})", inst.value.wrapping_add(self.cpu.registers.x as u16),)
+                        }
 
                         _ => String::from("")
                     };
