@@ -36,25 +36,13 @@ enum Command {
     Run,
     RunUntil,
     RunSilent,
-    RunSilentUntil,
-    SetRunSpeed,
+    RunUntilSilent,
     MoveCursorTo,
 
     ExecAsm,
 
     FollowCursor,
     Quit,
-}
-
-add_info! {
-    Command Result<&'static str, CommandError> {
-        name => {
-            Command::SetMem => Ok("set")
-        }
-        description => {
-            Command::SetMem => Ok("Desc")
-        }
-    } => Err(CommandError::InvalidCommand)
 }
 
 add_find_by! {
@@ -67,8 +55,7 @@ add_find_by! {
             "run" => Ok(Command::Run),
             "run_until" => Ok(Command::RunUntil),
             "run_silent" => Ok(Command::RunSilent),
-            "run_silent_until" => Ok(Command::RunSilentUntil),
-            "set_run_speed" => Ok(Command::SetRunSpeed),
+            "run_until_silent" => Ok(Command::RunUntilSilent),
             "follow" => Ok(Command::FollowCursor),
             "move" | "mov" => Ok(Command::MoveCursorTo),
             "exec" | "asm" => Ok(Command::ExecAsm),
@@ -211,7 +198,7 @@ add_parse_executor! {
             Ok(())
         },
 
-        Command::RunSilentUntil => {
+        Command::RunUntilSilent => {
             if !args.is_empty() {
                 let target_address: u16 = parse_addr_argument(tracer, args.first().unwrap()).map_err(|_e| CommandError::InvalidArgument)?;
 
@@ -220,7 +207,7 @@ add_parse_executor! {
 
                     let pc = tracer.cpu.registers.program_counter;
 
-                    if pc >= target_address {
+                    if pc == target_address {
                         return false;
                     }
 
@@ -870,7 +857,7 @@ impl Tracer {
                 let [states, disassembly] = vertical.areas(left_area);
 
                 let vertical = Layout::vertical([Fill(1), Fill(1)]);
-                let [registry, memory] = vertical.areas(right_area);
+                let [registry, bottom_right] = vertical.areas(right_area);
 
                 let states_block = Block::bordered()
                     .padding(Padding::horizontal(1))
@@ -901,6 +888,10 @@ impl Tracer {
                     registry,
                 );
 
+                let bottom_right_vertical = Layout::horizontal([Fill(1), Length(14)]);
+
+                let [memory, stack] = bottom_right_vertical.areas(bottom_right);
+
                 let memory_title_top = format!(
                     "SP: {0} ({0:#06X}) PC: {1} ({1:#06X})",
                     self.cpu.registers.stack_pointer, self.cpu.registers.program_counter
@@ -915,8 +906,15 @@ impl Tracer {
                     .title_top(Line::from(memory_title_top).right_aligned())
                     .title_bottom(Line::from(memory_title_bottom).right_aligned());
                 let memory_content =
-                    Text::from(self.build_memory_lines(memory_block.inner(parent).height as usize));
+                    Text::from(self.build_memory_lines(memory_block.inner(memory).height as usize));
                 f.render_widget(Paragraph::new(memory_content).block(memory_block), memory);
+
+                let stack_block = Block::bordered()
+                    .padding(Padding::horizontal(1))
+                    .title("Stack");
+                let stack_content = Text::from(self.build_stack_lines(stack_block.inner(stack).height as usize));
+                f.render_widget(Paragraph::new(stack_content).block(stack_block), stack);
+
             })
             .map_err(TracerError::IOError)
             .map(|_x| ())
@@ -1005,15 +1003,58 @@ impl Tracer {
                                 addr.wrapping_add(2).wrapping_sub((inst.value as i8).unsigned_abs() as usize)
                             };
 
-                            format!("({result_address:#06X})")
+                            if &result_address == addr {
+                                String::from("(loop)")
+                            } else {
+                                format!("({result_address:#06X})")
+                            }
                         }
 
                         AddressingMode::Indirect => {
                             format!("({:#04X}{:02X})", self.cpu.memory.data[inst.value.wrapping_add(1) as usize], self.cpu.memory.data[inst.value as usize])
                         }
 
+                        AddressingMode::IndexedIndirect => {
+                            let lsb = self.cpu.memory.data[((inst.value as u8).wrapping_add(self.cpu.registers.x)) as usize];
+                            let msb = self.cpu.memory.data[((inst.value as u8).wrapping_add(self.cpu.registers.x).wrapping_add(1)) as usize];
+
+                            let address = ((msb as u16) << 8) + (lsb as u16);
+
+                            format!("({address:#06X}) [{0:#04X} ({0})]",
+                                self.cpu.memory.data[address as usize]
+                            )
+                        }
+
+                        AddressingMode::IndirectIndexed => {
+                            let lsb = self.cpu.memory.data[inst.value as u8 as usize];
+                            let msb = self.cpu.memory.data[(inst.value as u8).wrapping_add(1) as usize];
+
+                            let address = (((msb as u16) << 8) + (lsb as u16)).wrapping_add(self.cpu.registers.y as u16);
+
+                            format!("({address:#06X}) [{0:#04X} ({0})]",
+                                self.cpu.memory.data[address as usize]
+                            )
+                        }
+
+                        AddressingMode::AbsoluteY => {
+                            format!("({0:#06X}) [{1:#04X} ({1})]",
+                                inst.value.wrapping_add(self.cpu.registers.y as u16),
+                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.y as u16) as usize]
+                            )
+                        }
+
+                        AddressingMode::ZeroPageX => {
+                            format!("({0:#04X}) [{1:#04X} ({1})]",
+                                inst.value.wrapping_add(self.cpu.registers.x as u16),
+                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.x as u16) as usize]
+                            )
+                        }
+
                         AddressingMode::AbsoluteX => {
-                            format!("({:#04X})", inst.value.wrapping_add(self.cpu.registers.x as u16),)
+                            format!("({0:#06X}) [{1:#04X} ({1})]",
+                                inst.value.wrapping_add(self.cpu.registers.x as u16),
+                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.x as u16) as usize]
+                            )
                         }
 
                         _ => String::from("")
@@ -1109,6 +1150,45 @@ impl Tracer {
 
                     line.push_span(Span::from(" ")); // needed to make highlight show only addres, not the space after it.
                 });
+
+                acc.push(line);
+
+                acc
+            })
+    }
+
+    fn build_stack_lines(&'_ self, count: usize) -> Vec<Line<'_>> {
+        let range;
+        let addr_offset;
+
+        if (self.cpu.registers.stack_pointer as usize) < 0x100 - count {
+            // TODO i think i'll need to make it scroll in case it will use more than "count"
+            range = 0x100..=0x1FF;
+            addr_offset = 0x0;
+        } else {
+            range = 0x100..=0x1FF;
+            addr_offset = 0x0;
+        }
+
+
+        self.cpu.memory.data[range]
+            .iter()
+            .rev()
+            .enumerate()
+            .fold(Vec::new(), |mut acc, (index, value)| {
+                let address = 0x200 - index - 1 + addr_offset;
+
+                let is_pos_at_cursor = address == self.memory_cursor_pos;
+                let is_pos_at_pc = address == self.cpu.registers.program_counter as usize;
+                let is_pos_at_stack = address == 0x100 + self.cpu.registers.stack_pointer as usize;
+
+                let mut line = Line::default().style(self.get_cursors_style(is_pos_at_cursor, is_pos_at_pc, is_pos_at_stack));
+
+                let addr_span = Span::from(format!("{address:#05X} "));
+                line.push_span(addr_span);
+                
+                let value_span = Span::from(format!("{value:#04X}"));
+                line.push_span(value_span);
 
                 acc.push(line);
 

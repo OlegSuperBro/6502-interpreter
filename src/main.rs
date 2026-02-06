@@ -298,8 +298,13 @@ impl CPU {
                                     self.registers.x)
                                     .inspect_err(|_e| panic!("Failed to set value"));
                     }
-                    _ => {
-                        todo!("WIP1 {op:?}")
+
+                    instructions::LoadOp::STY => {
+                        let _ = self.set_value(
+                                    mode,
+                                    value,
+                                    self.registers.y)
+                                    .inspect_err(|_e| panic!("Failed to set value"));
                     }
                 }
             }
@@ -349,7 +354,7 @@ impl CPU {
                     instructions::ArithmeticOp::CPX => {
                         let old_value = self.registers.x;
 
-                        let value =match self.get_value(mode, value) {
+                        let value = match self.get_value(mode, value) {
                             SingleOrDoubleValue::Single(x) => x,
                             SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
                         };
@@ -369,7 +374,10 @@ impl CPU {
                     instructions::ArithmeticOp::CPY => {
                         let old_value = self.registers.y;
 
-                        let value = self.get_single_value(mode, value)?;
+                        let value = match self.get_value(mode, value) {
+                            SingleOrDoubleValue::Single(x) => x,
+                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
+                        };
 
                         let new_value = old_value.wrapping_sub(value);
 
@@ -489,14 +497,24 @@ impl CPU {
                     }
 
                     instructions::StatusFlagOp::CLI => {
-                        self.registers.processor_status |= ProcessorStatus::InterruptDisable
+                        self.registers.processor_status &= !ProcessorStatus::InterruptDisable
+                    }
+
+                    instructions::StatusFlagOp::CLV => {
+                        self.registers.processor_status &= !ProcessorStatus::OverflowFlag
                     }
 
                     instructions::StatusFlagOp::SEC => {
                         self.registers.processor_status |= ProcessorStatus::CarryFlag
                     }
 
-                    _ => todo!("run status flag {op:?}")
+                    instructions::StatusFlagOp::SEI => {
+                        self.registers.processor_status |= ProcessorStatus::InterruptDisable
+                    }
+
+                    instructions::StatusFlagOp::SED => {
+                        self.registers.processor_status |= ProcessorStatus::DecimalMode
+                    }
                 }
             }
             OpCode::Branch(op) => {
@@ -737,22 +755,22 @@ impl CPU {
         match mode {
             AddressingMode::Accumulator => SingleOrDoubleValue::Single(self.registers.accumulator),
             AddressingMode::Immediate => SingleOrDoubleValue::Single(value as u8),
-            AddressingMode::ZeroPage => SingleOrDoubleValue::Single(self.memory.data[value as usize]),
+            AddressingMode::ZeroPage => SingleOrDoubleValue::Single(self.memory.data[value as u8 as usize]),
             AddressingMode::ZeroPageX => SingleOrDoubleValue::Single(self.memory.data[self.registers.x.wrapping_add(value as u8) as usize]),
             AddressingMode::ZeroPageY => SingleOrDoubleValue::Single(self.memory.data[self.registers.y.wrapping_add(value as u8) as usize]),
             AddressingMode::Relative => SingleOrDoubleValue::Single(value as u8),
             AddressingMode::Absolute => SingleOrDoubleValue::Double(value),
-            AddressingMode::AbsoluteX => SingleOrDoubleValue::Double(value + self.registers.x as u16),
-            AddressingMode::AbsoluteY => SingleOrDoubleValue::Double(value + self.registers.y as u16),
+            AddressingMode::AbsoluteX => SingleOrDoubleValue::Double(value.wrapping_add(self.registers.x as u16)),
+            AddressingMode::AbsoluteY => SingleOrDoubleValue::Double(value.wrapping_add(self.registers.y as u16)),
             AddressingMode::Indirect => {
                 let lsb = self.memory.data[value as usize];
-                let msb = self.memory.data[(value + 1) as usize];
+                let msb = self.memory.data[(value.wrapping_add(1)) as usize];
 
                 SingleOrDoubleValue::Double(((msb as u16) << 8) + (lsb as u16))
             }
             AddressingMode::IndexedIndirect => {
-                let lsb = self.memory.data[(value + self.registers.x as u16) as usize];
-                let msb = self.memory.data[(value + self.registers.x as u16 + 1) as usize];
+                let lsb = self.memory.data[(value.wrapping_add(self.registers.x as u16)) as usize];
+                let msb = self.memory.data[(value.wrapping_add(self.registers.x as u16).wrapping_add(1)) as usize];
 
                 let address = ((msb as u16) << 8) + (lsb as u16);
 
@@ -760,7 +778,7 @@ impl CPU {
             }
             AddressingMode::IndirectIndexed => {
                 let lsb = self.memory.data[(value) as usize];
-                let msb = self.memory.data[(value + 1) as usize];
+                let msb = self.memory.data[(value.wrapping_add(1)) as usize];
 
                 let address = ((msb as u16) << 8) + (lsb as u16) + self.registers.y as u16;
 
@@ -777,7 +795,42 @@ impl CPU {
             AddressingMode::ZeroPage => {
                 self.memory.data[address as usize] = value;
             }
-            _ => todo!("{:#06x} {mode:?}", self.registers.program_counter),
+
+            AddressingMode::ZeroPageX => {
+                self.memory.data[(address as u8).wrapping_add(self.registers.x) as usize] = value;
+            }
+
+            AddressingMode::ZeroPageY => {
+                self.memory.data[(address as u8).wrapping_add(self.registers.y) as usize] = value;
+            }
+
+            AddressingMode::AbsoluteX => {
+                self.memory.data[(address.wrapping_add(self.registers.x as u16)) as usize] = value;
+            }
+
+            AddressingMode::AbsoluteY => {
+                self.memory.data[(address.wrapping_add(self.registers.y as u16)) as usize] = value;
+            }
+
+            AddressingMode::IndexedIndirect => {
+                let lsb = self.memory.data[((address as u8).wrapping_add(self.registers.x)) as usize];
+                let msb = self.memory.data[((address as u8).wrapping_add(self.registers.x).wrapping_add(1)) as usize];
+
+                let address = ((msb as u16) << 8) + (lsb as u16);
+
+                self.memory.data[address as usize] = value
+            }
+
+            AddressingMode::IndirectIndexed => {
+                let lsb = self.memory.data[address as u8 as usize];
+                let msb = self.memory.data[(address as u8).wrapping_add(1) as usize];
+
+                let address = (((msb as u16) << 8) + (lsb as u16)).wrapping_add(self.registers.y as u16);
+
+                self.memory.data[address as usize] = value;
+            }
+
+            _ => todo!("{:#06x} set_value {mode:?}", self.registers.program_counter),
         }
 
         Ok(())
@@ -834,20 +887,16 @@ impl CPU {
 
     fn stack_push(&mut self, value: u8) {
         self.memory.data[0x100 + self.registers.stack_pointer as usize] = value;
-        let _ = fs::write(format!("memdump/{} {:#X} - ps {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
 
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_sub(1);
-
     }
 
     fn stack_pull(&mut self) -> u8 {
         self.registers.stack_pointer = self.registers.stack_pointer.wrapping_add(1);
 
         let address = 0x100 + self.registers.stack_pointer as u16;
-        let value = self.memory.data[address as usize];
-        let _ = fs::write(format!("memdump/{} {:#X} - pl {:#X}.bin", self.registers.program_counter, self.registers.program_counter, self.registers.stack_pointer), self.memory.data);
 
-        value
+        self.memory.data[address as usize]
     }
 
     fn reset(&mut self) {

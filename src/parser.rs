@@ -227,8 +227,21 @@ fn parse_address_mode(byte: &u8, opcode: &OpCode, group: &OpCodeGroup) -> Result
                 0b001 => Ok(AddressingMode::ZeroPage),
                 0b010 => Ok(AddressingMode::Accumulator),
                 0b011 => Ok(AddressingMode::Absolute),
-                0b101 => Ok(AddressingMode::ZeroPageX),
-                0b111 => Ok(AddressingMode::AbsoluteX),
+                0b101 => {
+                    if opcode == &OpCode::Load(LoadOp::STX) ||
+                       opcode == &OpCode::Load(LoadOp::LDX) {
+                        Ok(AddressingMode::ZeroPageY)
+                    } else {
+                        Ok(AddressingMode::ZeroPageX)
+                    }
+                },
+                0b111 => {
+                    if opcode == &OpCode::Load(LoadOp::LDX) {
+                        Ok(AddressingMode::AbsoluteY)
+                    } else {
+                        Ok(AddressingMode::AbsoluteX)
+                    }
+                },
                 _ => Err(ParseError::InvalidAddressingMode(*byte)),
 
             }
