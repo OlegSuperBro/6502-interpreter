@@ -2,7 +2,7 @@ use core::panic;
 use std::{env, error::Error, fmt::{Binary, Debug, Display, LowerHex}, fs::{self}, io::{self, Read}, path::Path, rc::Rc};
 use bitflags::{bitflags};
 
-use crate::{instructions::{AddressingMode, Instruction, OpCode}, parser::parse_instruction, tracer::{Tracer, TracerError}};
+use crate::{errors::ExecutionError, instructions::{AddressingMode, Instruction, OpCode}, parser::parse_instruction, tracer::{Tracer, TracerError}};
 
 mod instructions;
 mod parser;
@@ -233,10 +233,7 @@ impl CPU {
             OpCode::Load(op) => {
                 match op {
                     instructions::LoadOp::LDA => {
-                        let value = match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value = self.get_value(mode, value)?;
 
                         let flags = CPU::get_flags(
                             Some(self.registers.accumulator),
@@ -250,10 +247,7 @@ impl CPU {
                     }
 
                     instructions::LoadOp::LDX => {
-                        let value = match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value = self.get_value(mode, value)?;
 
                         let flags = CPU::get_flags(
                             Some(self.registers.accumulator),
@@ -267,10 +261,7 @@ impl CPU {
                     }
 
                     instructions::LoadOp::LDY => {
-                        let value = match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value = self.get_value(mode, value)?;
 
                         let flags = CPU::get_flags(
                             Some(self.registers.accumulator),
@@ -315,7 +306,7 @@ impl CPU {
 
                         let old_accumulator = self.registers.accumulator;
 
-                        let value = self.get_single_value(mode, value)?;
+                        let value = self.get_value(mode, value)?;
                         let carry = if (self.registers.processor_status & ProcessorStatus::CarryFlag).is_empty() {0} else {1};
 
                         let operand = value.wrapping_add(carry);
@@ -335,10 +326,7 @@ impl CPU {
                     instructions::ArithmeticOp::CMP => {
                         let old_value = self.registers.accumulator;
 
-                        let value =match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value =self.get_value(mode, value)?;
 
                         let new_value = old_value.wrapping_sub(value);
 
@@ -354,10 +342,7 @@ impl CPU {
                     instructions::ArithmeticOp::CPX => {
                         let old_value = self.registers.x;
 
-                        let value = match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value = self.get_value(mode, value)?;
 
                         let new_value = old_value.wrapping_sub(value);
 
@@ -374,10 +359,7 @@ impl CPU {
                     instructions::ArithmeticOp::CPY => {
                         let old_value = self.registers.y;
 
-                        let value = match self.get_value(mode, value) {
-                            SingleOrDoubleValue::Single(x) => x,
-                            SingleOrDoubleValue::Double(x) => self.memory.data[x as usize],
-                        };
+                        let value = self.get_value(mode, value)?;
 
                         let new_value = old_value.wrapping_sub(value);
 
@@ -396,14 +378,14 @@ impl CPU {
             OpCode::JumpCall(op) => {
                 match op {
                     instructions::JumpCallOp::JMP => {
-                        let value = self.get_double_value(mode, value)?;
+                        let value = self.get_address(mode, value)?;
                         self.registers.program_counter = value;
 
                         can_add_offset = false;
                     }
 
                     instructions::JumpCallOp::JSR => {
-                        let value = self.get_double_value(mode, value)?;
+                        let value = self.get_address(mode, value)?;
 
                         let target = self.registers.program_counter.wrapping_add(2);
 
@@ -521,56 +503,56 @@ impl CPU {
                 match op {
                     instructions::BranchOp::BNE => {
                         if (self.registers.processor_status & ProcessorStatus::ZeroFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BEQ => {
                         if !(self.registers.processor_status & ProcessorStatus::ZeroFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BPL => {
                         if (self.registers.processor_status & ProcessorStatus::NegativeFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BCC => {
                         if (self.registers.processor_status & ProcessorStatus::CarryFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BCS => {
                         if !(self.registers.processor_status & ProcessorStatus::CarryFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BMI => {
                         if !(self.registers.processor_status & ProcessorStatus::NegativeFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BVC => {
                         if (self.registers.processor_status & ProcessorStatus::OverflowFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
 
                     instructions::BranchOp::BVS => {
                         if !(self.registers.processor_status & ProcessorStatus::OverflowFlag).is_empty() {
-                            self.do_branch(instruction)?;
+                            self.registers.program_counter = self.get_address(mode, value)?;
                             can_add_offset = false;
                         }
                     }
@@ -696,7 +678,7 @@ impl CPU {
             OpCode::Logical(op) => {
                 match op {
                     instructions::LogicOp::EOR => {
-                        let value = self.get_single_value(mode, value)?;
+                        let value = self.get_value(mode, value)?;
 
                         let result = self.registers.accumulator ^ value;
 
@@ -712,7 +694,7 @@ impl CPU {
                     }
 
                     instructions::LogicOp::ORA => {
-                        let value = self.get_single_value(mode, value)?;
+                        let value = self.get_value(mode, value)?;
 
                         let result = self.registers.accumulator | value;
 
@@ -726,7 +708,121 @@ impl CPU {
                         self.set_flags(flags, mask_zn);
                         self.registers.accumulator = result;
                     }
+
+                    instructions::LogicOp::BIT => {
+                        let mask = mask_zn | ProcessorStatus::OverflowFlag;
+                        let a = self.registers.accumulator;
+                        let value = self.get_value(mode, value)?;
+
+                        let mut flags = ProcessorStatus::empty();
+
+                        if a & value == 0 {
+                            flags |= ProcessorStatus::ZeroFlag;
+                        }
+
+                        if value & 0b01000000 != 0 {
+                            flags |= ProcessorStatus::OverflowFlag
+                        }
+
+                        if value & 0b10000000 != 0 {
+                            flags |= ProcessorStatus::NegativeFlag
+                        }
+
+
+                        self.set_flags(flags, mask);
+                    }
                     _ => todo!("run logical {op:?}")
+                }
+            }
+            OpCode::Shift(op) => {
+                match op {
+                    instructions::ShiftOp::ASL => {
+                        let mask = mask_zn | ProcessorStatus::CarryFlag;
+
+                        let op_value = self.get_value(mode, value)?;
+
+                        let (result, carry) = op_value.overflowing_shl(1);
+
+                        let flags = CPU::get_flags(Some(op_value), None, &result, Some(mask)) | if op_value & 0b10000000 != 0 {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()} ;
+
+                        if mode == AddressingMode::Accumulator {
+                            self.set_value(mode, 0, result)?;
+                        } else {
+                            let addr = self.get_address(mode, value)?;
+                            self.set_value(mode, addr, op_value)?;
+                        }
+
+                        self.set_flags(flags, mask);
+                    }
+
+                    instructions::ShiftOp::LSR => {
+                        let mask = mask_zn | ProcessorStatus::CarryFlag;
+
+                        let op_value = self.get_value(mode, value)?;
+
+                        let (result, carry) = op_value.overflowing_shr(1);
+
+                        let flags = CPU::get_flags(Some(op_value), None, &result, Some(mask)) | if op_value & 0b00000001 != 0 {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()} ;
+
+                        if mode == AddressingMode::Accumulator {
+                            self.set_value(mode, 0, result)?;
+                        } else {
+                            let addr = self.get_address(mode, value)?;
+                            self.set_value(mode, addr, op_value)?;
+                        }
+
+                        self.set_flags(flags, mask);
+                    }
+
+                    instructions::ShiftOp::ROL => {
+                        let mask = mask_zn | ProcessorStatus::CarryFlag;
+
+                        let op_value = self.get_value(mode, value)?;
+
+                        let (mut result, carry) = op_value.overflowing_shl(1);
+
+                        result |= if (self.registers.processor_status & ProcessorStatus::CarryFlag).bits() != 0 {
+                            1
+                        } else {
+                            0
+                        };
+
+                        let flags = CPU::get_flags(Some(op_value), None, &result, Some(mask)) | if op_value & 0b10000000 != 0 {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()} ;
+
+                        if mode == AddressingMode::Accumulator {
+                            self.set_value(mode, 0, result)?;
+                        } else {
+                            let addr = self.get_address(mode, value)?;
+                            self.set_value(mode, addr, op_value)?;
+                        }
+
+                        self.set_flags(flags, mask);
+                    }
+
+                    instructions::ShiftOp::ROR => {
+                        let mask = mask_zn | ProcessorStatus::CarryFlag;
+
+                        let op_value = self.get_value(mode, value)?;
+
+                        let (mut result, carry) = op_value.overflowing_shr(1);
+
+                        result |= if (self.registers.processor_status & ProcessorStatus::CarryFlag).bits() != 0 {
+                            1 << 7
+                        } else {
+                            0 << 7
+                        };
+
+                        let flags = CPU::get_flags(Some(op_value), None, &result, Some(mask)) | if op_value & 0b00000001 != 0 {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()} ;
+
+                        if mode == AddressingMode::Accumulator {
+                            self.set_value(mode, 0, result)?;
+                        } else {
+                            let addr = self.get_address(mode, value)?;
+                            self.set_value(mode, addr, op_value)?;
+                        }
+
+                        self.set_flags(flags, mask);
+                    }
                 }
             }
             _ => {
@@ -737,55 +833,57 @@ impl CPU {
         Ok(can_add_offset)
     }
 
-    fn get_single_value(&mut self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
-        match self.get_value(mode, value) {
-            SingleOrDoubleValue::Single(x) => Ok(x),
-            SingleOrDoubleValue::Double(_x) => todo!("Trying to get single value, got double instead with mode {mode:?}")
-        }
-    }
-
-    fn get_double_value(&mut self, mode: AddressingMode, value: u16) -> Result<u16, Box<dyn Error>> {
-        match self.get_value(mode, value) {
-            SingleOrDoubleValue::Single(_x) => todo!("Trying to get double value, got single instead with mode {mode:?}"),
-            SingleOrDoubleValue::Double(x) => Ok(x)
-        }
-    }
-
-    fn get_value(&mut self, mode: AddressingMode, value: u16) -> SingleOrDoubleValue {
+    fn get_address(&mut self, mode: AddressingMode, value: u16) -> Result<u16, ExecutionError> {
         match mode {
-            AddressingMode::Accumulator => SingleOrDoubleValue::Single(self.registers.accumulator),
-            AddressingMode::Immediate => SingleOrDoubleValue::Single(value as u8),
-            AddressingMode::ZeroPage => SingleOrDoubleValue::Single(self.memory.data[value as u8 as usize]),
-            AddressingMode::ZeroPageX => SingleOrDoubleValue::Single(self.memory.data[self.registers.x.wrapping_add(value as u8) as usize]),
-            AddressingMode::ZeroPageY => SingleOrDoubleValue::Single(self.memory.data[self.registers.y.wrapping_add(value as u8) as usize]),
-            AddressingMode::Relative => SingleOrDoubleValue::Single(value as u8),
-            AddressingMode::Absolute => SingleOrDoubleValue::Double(value),
-            AddressingMode::AbsoluteX => SingleOrDoubleValue::Double(value.wrapping_add(self.registers.x as u16)),
-            AddressingMode::AbsoluteY => SingleOrDoubleValue::Double(value.wrapping_add(self.registers.y as u16)),
+            AddressingMode::ZeroPage => Ok(value),
+            AddressingMode::ZeroPageX => Ok(self.registers.x.wrapping_add(value as u8) as u16),
+            AddressingMode::ZeroPageY => Ok(self.registers.y.wrapping_add(value as u8) as u16),
+            AddressingMode::Relative => {
+                let value = value as i8; // cuz 2 should increment during processing this instruction
+
+                if value < 0 {
+                    Ok(self.registers.program_counter.wrapping_add(2).wrapping_sub(value.wrapping_abs() as u16))
+                } else {
+                    Ok(self.registers.program_counter.wrapping_add(2).wrapping_add(value as u16))
+                }
+            },
+            AddressingMode::Absolute => Ok(value),
+            AddressingMode::AbsoluteX => Ok(value.wrapping_add(self.registers.x as u16)),
+            AddressingMode::AbsoluteY => Ok(value.wrapping_add(self.registers.y as u16)),
             AddressingMode::Indirect => {
                 let lsb = self.memory.data[value as usize];
                 let msb = self.memory.data[(value.wrapping_add(1)) as usize];
 
-                SingleOrDoubleValue::Double(((msb as u16) << 8) + (lsb as u16))
+                Ok(((msb as u16) << 8) + (lsb as u16))
             }
             AddressingMode::IndexedIndirect => {
-                let lsb = self.memory.data[(value.wrapping_add(self.registers.x as u16)) as usize];
-                let msb = self.memory.data[(value.wrapping_add(self.registers.x as u16).wrapping_add(1)) as usize];
+                let lsb = self.memory.data[((value as u8).wrapping_add(self.registers.x)) as usize];
+                let msb = self.memory.data[((value as u8).wrapping_add(self.registers.x).wrapping_add(1)) as usize];
 
-                let address = ((msb as u16) << 8) + (lsb as u16);
 
-                SingleOrDoubleValue::Single(self.memory.data[address as usize])
+                Ok(((msb as u16) << 8) + (lsb as u16))
             }
             AddressingMode::IndirectIndexed => {
                 let lsb = self.memory.data[(value) as usize];
                 let msb = self.memory.data[(value.wrapping_add(1)) as usize];
 
-                let address = ((msb as u16) << 8) + (lsb as u16) + self.registers.y as u16;
-
-                SingleOrDoubleValue::Single(self.memory.data[address as usize])
+                Ok(((msb as u16) << 8) + (lsb as u16) + self.registers.y as u16)
             }
 
-            _ => todo!("get_value {mode:?}")
+            _ => Err(ExecutionError::InvalidAddressingMode)
+        }
+    }
+
+    fn get_value(&mut self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
+        if let Ok(addr) = self.get_address(mode, value) {
+            Ok(self.memory.data[addr as usize])
+        } else {
+            match mode {
+                AddressingMode::Accumulator => Ok(self.registers.accumulator),
+                AddressingMode::Immediate => Ok(value as u8),
+
+                _ => unimplemented!("Failed to get address and {mode:?} is not meant to get value")
+            }
         }
     }
 
@@ -794,6 +892,10 @@ impl CPU {
             AddressingMode::Absolute |
             AddressingMode::ZeroPage => {
                 self.memory.data[address as usize] = value;
+            }
+
+            AddressingMode::Accumulator => {
+                self.registers.accumulator = value;
             }
 
             AddressingMode::ZeroPageX => {
@@ -864,21 +966,6 @@ impl CPU {
         // Break Command flag is ignored cuz it's set by specific instructions
 
         result_flag & mask.unwrap_or(ProcessorStatus::all())
-    }
-
-    fn do_branch(&mut self, instruction: Instruction) -> Result<(), Box<dyn Error>> {
-        let mode = instruction.addressing_mode;
-        let value = instruction.value;
-
-        let value = self.get_single_value(mode, value)? as i8; // cuz 2 should increment during processing this instruction
-
-        if value < 0 {
-            self.registers.program_counter = self.registers.program_counter.wrapping_add(2).wrapping_sub(value.wrapping_abs() as u16);
-        } else {
-            self.registers.program_counter = self.registers.program_counter.wrapping_add(2).wrapping_add(value as u16);
-        }
-
-        Ok(())
     }
 
     fn load_into_ram(&mut self, rom: &Rom) {
