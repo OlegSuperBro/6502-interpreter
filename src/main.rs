@@ -17,7 +17,7 @@ const STOP_ON_JUMP_INSTRUCTION: bool = false;
 
 
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Debug,Clone, Copy)]
     pub struct ProcessorStatus: u8 {
         const CarryFlag = 1 << 0;
         const ZeroFlag = 1 << 1;
@@ -310,16 +310,40 @@ impl CPU {
                         let carry = if (self.registers.processor_status & ProcessorStatus::CarryFlag).is_empty() {0} else {1};
 
                         let operand = value.wrapping_add(carry);
-                        let final_result = self.registers.accumulator.wrapping_add(operand);
+                        let (final_result, carry) = self.registers.accumulator.overflowing_add(operand);
 
-                        self.set_flags(CPU::get_flags(
+                        let flags = CPU::get_flags(
                                 Some(old_accumulator),
                                 Some(operand),
                                 &final_result,
                                 Some(mask)
-                            ),
-                            mask
-                        );
+                            ) | if carry {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()};
+
+                        // println!("{old_accumulator} {value} {operand} {final_result} {flags}");
+
+                        self.set_flags(flags, mask);
+                        self.registers.accumulator = final_result;
+                    }
+
+                    instructions::ArithmeticOp::SBC => {
+                        let mask = ProcessorStatus::CarryFlag | ProcessorStatus::ZeroFlag | ProcessorStatus::OverflowFlag | ProcessorStatus::NegativeFlag;
+
+                        let old_accumulator = self.registers.accumulator;
+
+                        let value = self.get_value(mode, value)?;
+                        let carry = if (self.registers.processor_status & ProcessorStatus::CarryFlag).is_empty() {0} else {1};
+
+                        let operand = value;
+                        let final_result = self.registers.accumulator.wrapping_sub(operand).wrapping_sub(1 - carry);
+
+                        let flags = CPU::get_flags(
+                                Some(old_accumulator),
+                                Some(operand),
+                                &final_result,
+                                Some(mask)
+                            );
+
+                        self.set_flags(flags, mask);
                         self.registers.accumulator = final_result;
                     }
 
@@ -369,10 +393,9 @@ impl CPU {
                             &new_value,
                             Some(mask_zn)
                         ) | if old_value >= value {ProcessorStatus::CarryFlag} else {ProcessorStatus::empty()},
-                        mask_zn | ProcessorStatus::CarryFlag
-                    );
+                            mask_zn | ProcessorStatus::CarryFlag
+                        );
                     }
-                    _ => todo!("Arithmetic {op:?}")
                 }
             }
             OpCode::JumpCall(op) => {
@@ -564,7 +587,7 @@ impl CPU {
                         let value = self.registers.x.wrapping_sub(1);
 
                         let flags = CPU::get_flags(
-                            Some(self.registers.accumulator),
+                            Some(self.registers.x),
                             None,
                             &value,
                             Some(mask_zn)
@@ -577,7 +600,7 @@ impl CPU {
                         let value = self.registers.y.wrapping_sub(1);
 
                         let flags = CPU::get_flags(
-                            Some(self.registers.accumulator),
+                            Some(self.registers.y),
                             None,
                             &value,
                             Some(mask_zn)
@@ -590,7 +613,7 @@ impl CPU {
                         let value = self.registers.x.wrapping_add(1);
 
                         let flags = CPU::get_flags(
-                            Some(self.registers.accumulator),
+                            Some(self.registers.x),
                             None,
                             &value,
                             Some(mask_zn)
@@ -603,7 +626,7 @@ impl CPU {
                         let value = self.registers.y.wrapping_add(1);
 
                         let flags = CPU::get_flags(
-                            Some(self.registers.accumulator),
+                            Some(self.registers.y),
                             None,
                             &value,
                             Some(mask_zn)
@@ -611,6 +634,38 @@ impl CPU {
 
                         self.set_flags(flags, mask_zn);
                         self.registers.y = value;
+                    }
+
+                    instructions::IncDecOp::INC => {
+                        let mem_value = self.get_value(mode, value)?;
+
+                        let result = mem_value.wrapping_add(1);
+
+                        let flags = CPU::get_flags(
+                            Some(mem_value),
+                            None,
+                            &result,
+                            Some(mask_zn)
+                        );
+
+                        self.set_flags(flags, mask_zn);
+                        self.set_value(mode, value, result)?;
+                    }
+
+                    instructions::IncDecOp::DEC => {
+                        let mem_value = self.get_value(mode, value)?;
+
+                        let result = mem_value.wrapping_sub(1);
+
+                        let flags = CPU::get_flags(
+                            Some(mem_value),
+                            None,
+                            &result,
+                            Some(mask_zn)
+                        );
+
+                        self.set_flags(flags, mask_zn);
+                        self.set_value(mode, value, result)?;
                     }
 
                     _ => todo!("run IncDec {op:?}")
@@ -731,6 +786,23 @@ impl CPU {
 
                         self.set_flags(flags, mask);
                     }
+
+                    instructions::LogicOp::AND => {
+                        let value = self.get_value(mode, value)?;
+
+                        let result = self.registers.accumulator & value;
+
+                        let flags = CPU::get_flags(
+                                Some(self.registers.accumulator),
+                                Some(value),
+                                &result,
+                                Some(mask_zn)
+                            );
+
+                        self.set_flags(flags, mask_zn);
+                        self.registers.accumulator = result;
+                    }
+
                     _ => todo!("run logical {op:?}")
                 }
             }
@@ -748,8 +820,7 @@ impl CPU {
                         if mode == AddressingMode::Accumulator {
                             self.set_value(mode, 0, result)?;
                         } else {
-                            let addr = self.get_address(mode, value)?;
-                            self.set_value(mode, addr, op_value)?;
+                            self.set_value(mode, value, result)?;
                         }
 
                         self.set_flags(flags, mask);
@@ -767,8 +838,7 @@ impl CPU {
                         if mode == AddressingMode::Accumulator {
                             self.set_value(mode, 0, result)?;
                         } else {
-                            let addr = self.get_address(mode, value)?;
-                            self.set_value(mode, addr, op_value)?;
+                            self.set_value(mode, value, result)?;
                         }
 
                         self.set_flags(flags, mask);
@@ -792,8 +862,7 @@ impl CPU {
                         if mode == AddressingMode::Accumulator {
                             self.set_value(mode, 0, result)?;
                         } else {
-                            let addr = self.get_address(mode, value)?;
-                            self.set_value(mode, addr, op_value)?;
+                            self.set_value(mode, value, result)?;
                         }
 
                         self.set_flags(flags, mask);
@@ -817,8 +886,7 @@ impl CPU {
                         if mode == AddressingMode::Accumulator {
                             self.set_value(mode, 0, result)?;
                         } else {
-                            let addr = self.get_address(mode, value)?;
-                            self.set_value(mode, addr, op_value)?;
+                            self.set_value(mode, value, result)?;
                         }
 
                         self.set_flags(flags, mask);
@@ -833,7 +901,7 @@ impl CPU {
         Ok(can_add_offset)
     }
 
-    fn get_address(&mut self, mode: AddressingMode, value: u16) -> Result<u16, ExecutionError> {
+    fn get_address(&self, mode: AddressingMode, value: u16) -> Result<u16, ExecutionError> {
         match mode {
             AddressingMode::ZeroPage => Ok(value),
             AddressingMode::ZeroPageX => Ok(self.registers.x.wrapping_add(value as u8) as u16),
@@ -867,14 +935,14 @@ impl CPU {
                 let lsb = self.memory.data[(value) as usize];
                 let msb = self.memory.data[(value.wrapping_add(1)) as usize];
 
-                Ok(((msb as u16) << 8) + (lsb as u16) + self.registers.y as u16)
+                Ok((((msb as u16) << 8) + (lsb as u16)).wrapping_add(self.registers.y as u16))
             }
 
             _ => Err(ExecutionError::InvalidAddressingMode)
         }
     }
 
-    fn get_value(&mut self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
+    fn get_value(&self, mode: AddressingMode, value: u16) -> Result<u8, Box<dyn Error>> {
         if let Ok(addr) = self.get_address(mode, value) {
             Ok(self.memory.data[addr as usize])
         } else {
@@ -887,11 +955,11 @@ impl CPU {
         }
     }
 
-    fn set_value(&mut self, mode: AddressingMode, address: u16, value: u8) -> Result<(), Box<dyn Error>> {
+    fn set_value(&mut self, mode: AddressingMode, inst_value: u16, value: u8) -> Result<(), Box<dyn Error>> {
         match mode {
             AddressingMode::Absolute |
             AddressingMode::ZeroPage => {
-                self.memory.data[address as usize] = value;
+                self.memory.data[inst_value as usize] = value;
             }
 
             AddressingMode::Accumulator => {
@@ -899,24 +967,24 @@ impl CPU {
             }
 
             AddressingMode::ZeroPageX => {
-                self.memory.data[(address as u8).wrapping_add(self.registers.x) as usize] = value;
+                self.memory.data[(inst_value as u8).wrapping_add(self.registers.x) as usize] = value;
             }
 
             AddressingMode::ZeroPageY => {
-                self.memory.data[(address as u8).wrapping_add(self.registers.y) as usize] = value;
+                self.memory.data[(inst_value as u8).wrapping_add(self.registers.y) as usize] = value;
             }
 
             AddressingMode::AbsoluteX => {
-                self.memory.data[(address.wrapping_add(self.registers.x as u16)) as usize] = value;
+                self.memory.data[(inst_value.wrapping_add(self.registers.x as u16)) as usize] = value;
             }
 
             AddressingMode::AbsoluteY => {
-                self.memory.data[(address.wrapping_add(self.registers.y as u16)) as usize] = value;
+                self.memory.data[(inst_value.wrapping_add(self.registers.y as u16)) as usize] = value;
             }
 
             AddressingMode::IndexedIndirect => {
-                let lsb = self.memory.data[((address as u8).wrapping_add(self.registers.x)) as usize];
-                let msb = self.memory.data[((address as u8).wrapping_add(self.registers.x).wrapping_add(1)) as usize];
+                let lsb = self.memory.data[((inst_value as u8).wrapping_add(self.registers.x)) as usize];
+                let msb = self.memory.data[((inst_value as u8).wrapping_add(self.registers.x).wrapping_add(1)) as usize];
 
                 let address = ((msb as u16) << 8) + (lsb as u16);
 
@@ -924,8 +992,8 @@ impl CPU {
             }
 
             AddressingMode::IndirectIndexed => {
-                let lsb = self.memory.data[address as u8 as usize];
-                let msb = self.memory.data[(address as u8).wrapping_add(1) as usize];
+                let lsb = self.memory.data[inst_value as u8 as usize];
+                let msb = self.memory.data[(inst_value as u8).wrapping_add(1) as usize];
 
                 let address = (((msb as u16) << 8) + (lsb as u16)).wrapping_add(self.registers.y as u16);
 

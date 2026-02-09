@@ -995,69 +995,44 @@ impl Tracer {
                     let is_pos_at_stack =
                         (*addr..to).contains(&(0x100 + self.cpu.registers.stack_pointer as usize));
 
-                    let optional_text = match inst.addressing_mode {
-                        AddressingMode::Relative => {
-                            let result_address= if inst.value as i8 > 0 {
-                                addr.wrapping_add(2).wrapping_add(inst.value as usize)
-                            } else {
-                                addr.wrapping_add(2).wrapping_sub((inst.value as i8).unsigned_abs() as usize)
-                            };
+                    let optional_text = {
+                        if let Ok(result_address) = self.cpu.get_address(inst.addressing_mode, inst.value) {
+                            match inst.addressing_mode {
+                                AddressingMode::Relative => {
+                                    let result_address = result_address.wrapping_sub(self.cpu.registers.program_counter).wrapping_add(*addr as u16);
+                                    if result_address as usize == *addr {
+                                        String::from("(loop)")
+                                    } else {
+                                        format!("({result_address:#06X})")
+                                    }
+                                }
 
-                            if &result_address == addr {
-                                String::from("(loop)")
-                            } else {
-                                format!("({result_address:#06X})")
+                                AddressingMode::Indirect => {
+                                    format!("({result_address:#06X})")
+                                }
+
+                                AddressingMode::AbsoluteX |
+                                AddressingMode::AbsoluteY |
+                                AddressingMode::IndirectIndexed |
+                                AddressingMode::IndexedIndirect => {
+                                    format!("({result_address:#06X}) [{0:#04X} ({0})]",
+                                        self.cpu.memory.data[result_address as usize]
+                                    )
+                                }
+
+                                AddressingMode::ZeroPage |
+                                AddressingMode::ZeroPageX |
+                                AddressingMode::ZeroPageY => {
+                                    format!("({result_address:#04X}) [{0:#04X} ({0})]",
+                                        self.cpu.memory.data[result_address as usize]
+                                    )
+                                }
+
+                                _ => String::from("")
                             }
+                        } else {
+                            String::from("")
                         }
-
-                        AddressingMode::Indirect => {
-                            format!("({:#04X}{:02X})", self.cpu.memory.data[inst.value.wrapping_add(1) as usize], self.cpu.memory.data[inst.value as usize])
-                        }
-
-                        AddressingMode::IndexedIndirect => {
-                            let lsb = self.cpu.memory.data[((inst.value as u8).wrapping_add(self.cpu.registers.x)) as usize];
-                            let msb = self.cpu.memory.data[((inst.value as u8).wrapping_add(self.cpu.registers.x).wrapping_add(1)) as usize];
-
-                            let address = ((msb as u16) << 8) + (lsb as u16);
-
-                            format!("({address:#06X}) [{0:#04X} ({0})]",
-                                self.cpu.memory.data[address as usize]
-                            )
-                        }
-
-                        AddressingMode::IndirectIndexed => {
-                            let lsb = self.cpu.memory.data[inst.value as u8 as usize];
-                            let msb = self.cpu.memory.data[(inst.value as u8).wrapping_add(1) as usize];
-
-                            let address = (((msb as u16) << 8) + (lsb as u16)).wrapping_add(self.cpu.registers.y as u16);
-
-                            format!("({address:#06X}) [{0:#04X} ({0})]",
-                                self.cpu.memory.data[address as usize]
-                            )
-                        }
-
-                        AddressingMode::AbsoluteY => {
-                            format!("({0:#06X}) [{1:#04X} ({1})]",
-                                inst.value.wrapping_add(self.cpu.registers.y as u16),
-                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.y as u16) as usize]
-                            )
-                        }
-
-                        AddressingMode::ZeroPageX => {
-                            format!("({0:#04X}) [{1:#04X} ({1})]",
-                                inst.value.wrapping_add(self.cpu.registers.x as u16),
-                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.x as u16) as usize]
-                            )
-                        }
-
-                        AddressingMode::AbsoluteX => {
-                            format!("({0:#06X}) [{1:#04X} ({1})]",
-                                inst.value.wrapping_add(self.cpu.registers.x as u16),
-                                self.cpu.memory.data[inst.value.wrapping_add(self.cpu.registers.x as u16) as usize]
-                            )
-                        }
-
-                        _ => String::from("")
                     };
 
                     let span: Span = Span::styled(
