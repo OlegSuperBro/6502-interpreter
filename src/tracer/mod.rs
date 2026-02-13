@@ -2,7 +2,6 @@ use std::{cell::RefCell, error::Error, io::Stdout, rc::Rc, time::Duration, vec};
 
 use crossterm::{
     event::{self, KeyCode, KeyEvent},
-    terminal::size,
 };
 use ratatui::{
     Terminal,
@@ -15,12 +14,12 @@ use ratatui::{
 
 use crate::{
     CPU, ProcessorStatus,
-    instructions::{self, AddressingMode, Instruction, JumpCallOp, OpCode},
+    instructions::{self, AddressingMode, Instruction},
     parser::parse_instruction,
     tracer::errors::{CommandError, HotkeyError},
 };
 
-use macros::{add_find_by, add_info, add_parse_executor};
+use macros::{add_find_by, add_parse_executor};
 
 pub use errors::TracerError;
 
@@ -408,46 +407,26 @@ add_parse_executor! {
             Ok(())
         },
         Hotkeys::MoveCursorLeft => {
-            match tracer.active_area {
-                Areas::Memory => {
-                    if tracer.memory_cursor_pos != 0 {
-                        tracer.memory_cursor_pos -= 1;
-                    }
-                }
-                _ => todo!("move cursor left")
+            if tracer.memory_cursor_pos != 0 {
+                tracer.memory_cursor_pos -= 1;
             }
             Ok(())
         },
         Hotkeys::MoveCursorRight => {
-            match tracer.active_area {
-                Areas::Memory => {
-                    if tracer.memory_cursor_pos != 0xFFFF {
-                        tracer.memory_cursor_pos += 1;
-                    }
-                }
-                _ => todo!("move cursor right")
+            if tracer.memory_cursor_pos != 0xFFFF {
+                tracer.memory_cursor_pos += 1;
             }
             Ok(())
         },
         Hotkeys::MoveCursorUp => {
-            match tracer.active_area {
-                Areas::Memory => {
-                    if tracer.memory_cursor_pos > 0x000F {
-                        tracer.memory_cursor_pos -= 0x10;
-                    }
-                }
-                _ => todo!("move cursor up")
+            if tracer.memory_cursor_pos > 0x000F {
+                tracer.memory_cursor_pos -= 0x10;
             }
             Ok(())
         },
         Hotkeys::MoveCursorDown => {
-            match tracer.active_area {
-                Areas::Memory => {
-                    if tracer.memory_cursor_pos < 0xFFF0 {
-                        tracer.memory_cursor_pos += 0x10;
-                    }
-                }
-                _ => todo!("move cursor down")
+            if tracer.memory_cursor_pos < 0xFFF0 {
+                tracer.memory_cursor_pos += 0x10;
             }
             Ok(())
         },
@@ -469,12 +448,6 @@ add_parse_executor! {
             Ok(())
         }
     } => todo!("hotkey")
-}
-
-pub enum Areas {
-    Dissasembly,
-    Memory,
-    Registry,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -510,8 +483,6 @@ pub struct Tracer {
     pub command_error: Option<Box<dyn Error>>,
     pub is_inputting_command: bool,
 
-    pub active_area: Areas,
-
     pub current_state: States,
 
     pub registry_history: Vec<ProcessorStatusHistoryEntry>,
@@ -524,12 +495,7 @@ pub enum MemoryCursorTracking {
     Cursor,
     ProgramCounter,
     StackPointer,
-    Static(u16),
-}
-
-enum Layouts {
-    Compact,
-    Full,
+    // Static(u16),
 }
 
 impl Tracer {
@@ -546,7 +512,6 @@ impl Tracer {
             is_inputting_command: false,
 
             registry_history: Vec::new(),
-            active_area: Areas::Memory,
             current_state: States::Waiting,
             command_input: String::new(),
 
@@ -662,7 +627,7 @@ impl Tracer {
     }
 
     fn process_inputs(&mut self) -> Result<bool, TracerError> {
-        if let Ok(res) = crossterm::event::poll(Duration::from_nanos(1))
+        if let Ok(res) = crossterm::event::poll(Duration::from_nanos(0))
             && !res
         {
             return Ok(false);
@@ -677,12 +642,12 @@ impl Tracer {
 
     fn process_hotkey(&mut self) -> Result<(), TracerError> {
         if let event::Event::Key(key_event) =
-            crossterm::event::read().map_err(TracerError::IOError)?
+            crossterm::event::read().map_err(TracerError::IO)?
         {
             let result = self.process_key(key_event);
 
             if let Err(e) = result {
-                if let TracerError::HotkeyError(HotkeyError::InvalidHotkey) = e {
+                if let TracerError::Hotkey(HotkeyError::InvalidHotkey) = e {
                     return Ok(());
                 } else {
                     return Err(e);
@@ -694,14 +659,14 @@ impl Tracer {
     }
 
     fn process_key(&mut self, key_event: KeyEvent) -> Result<(), TracerError> {
-        let hotkey = Hotkeys::find_by_code(&key_event.code).map_err(TracerError::HotkeyError)?;
+        let hotkey = Hotkeys::find_by_code(&key_event.code).map_err(TracerError::Hotkey)?;
 
-        Hotkeys::parse_and_run(&hotkey, self).map_err(TracerError::HotkeyError)?;
+        Hotkeys::parse_and_run(&hotkey, self).map_err(TracerError::Hotkey)?;
         Ok(())
     }
 
     fn process_command_input(&mut self) -> Result<(), TracerError> {
-        match crossterm::event::read().map_err(TracerError::IOError)? {
+        match crossterm::event::read().map_err(TracerError::IO)? {
             event::Event::Key(key_event) => {
                 match key_event.code {
                     KeyCode::Backspace => {
@@ -797,7 +762,7 @@ impl Tracer {
     }
 
     fn process_command(&mut self, input: &str) -> Result<(), TracerError> {
-        Command::execute(input, self).map_err(TracerError::CommandError)?;
+        Command::execute(input, self).map_err(TracerError::Command)?;
 
         Ok(())
     }
@@ -805,18 +770,12 @@ impl Tracer {
     fn draw(&mut self) -> Result<(), TracerError> {
         if let Some(pointer) = self.terminal.clone() {
             let mut terminal = pointer.borrow_mut();
-            let size = size().map_err(TracerError::IOError)?;
-            match Tracer::get_layout_type(size) {
-                Layouts::Compact => todo!(),
-                Layouts::Full => {
-                    self.draw_full(&mut terminal)?;
-                }
-            }
+            self.draw_full(&mut terminal)?;
 
             return Ok(());
         }
 
-        Err(TracerError::TerminalError(
+        Err(TracerError::Terminal(
             "Failed to retrieve pointer for terminal during draw",
         ))
     }
@@ -914,14 +873,9 @@ impl Tracer {
                     .title("Stack");
                 let stack_content = Text::from(self.build_stack_lines(stack_block.inner(stack).height as usize));
                 f.render_widget(Paragraph::new(stack_content).block(stack_block), stack);
-
             })
-            .map_err(TracerError::IOError)
+            .map_err(TracerError::IO)
             .map(|_x| ())
-    }
-
-    fn get_layout_type(size: (u16, u16)) -> Layouts {
-        Layouts::Full
     }
 
     fn build_states_lines(&'_ self) -> Vec<Line<'_>> {
@@ -962,7 +916,6 @@ impl Tracer {
             MemoryCursorTracking::Cursor => self.memory_cursor_pos,
             MemoryCursorTracking::ProgramCounter => self.cpu.registers.program_counter as usize,
             MemoryCursorTracking::StackPointer => self.cpu.registers.stack_pointer as usize,
-            MemoryCursorTracking::Static(x) => x as usize,
         };
 
         let mut lines: Vec<Line> = vec![];
@@ -1094,8 +1047,6 @@ impl Tracer {
             MemoryCursorTracking::StackPointer => {
                 16 * (self.cpu.registers.stack_pointer / 16) as usize
             }
-
-            MemoryCursorTracking::Static(x) => 16 * (x / 16) as usize,
         };
 
         self.cpu.memory.data[from_addr..]

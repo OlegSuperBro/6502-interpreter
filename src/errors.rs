@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display};
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)] // there should be other errors by for now there's only "invalid" errors
 pub enum ParseError {
     InvalidOpCodeGroup(u8),
     InvalidAddressingMode(u8),
@@ -24,13 +25,15 @@ impl Error for ParseError {}
 
 #[derive(Debug)]
 pub enum ExecutionError {
-    InvalidAddressingMode
+    InvalidAddressingMode,
+    InvalidBcdValue(u8)
 }
 
 impl Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExecutionError::InvalidAddressingMode => write!(f, "Invalid addressing mode"),
+            ExecutionError::InvalidBcdValue(x) => write!(f, "Invalid BCD value: {x:#04X}")
         }
     }
 }

@@ -1,35 +1,3 @@
-
-macro_rules! add_info {
-    ($name:ident $return_type:ty{
-        $(
-            $field_name:ident => {
-                $(
-                    $variant:pat => $field_value:expr
-                ),+
-            }
-        )+
-    } => $wildcard:expr) => {
-        impl $name {
-            $(
-                paste::paste! (
-                    fn [<get_$field_name>](value: &$name) -> $return_type {
-                        match value {
-                            $(
-                                $variant => $field_value,
-                            )*
-
-                            #[allow(unreachable_patterns)]
-                            _ => $wildcard
-                        }
-                    }
-                );
-            )+
-        }
-    };
-}
-
-pub(super) use add_info;
-
 macro_rules! add_find_by {
     ($name:ident $return_type:ty {
         $(
@@ -72,6 +40,7 @@ macro_rules! add_parse_executor {
                     $(
                         $variant => $code
                     )*
+                    #[allow(unreachable_patterns)]
                     _ => $wildcard
                 }
             }
