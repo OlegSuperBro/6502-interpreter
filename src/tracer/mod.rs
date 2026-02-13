@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use crate::{
-    CPU, ProcessorStatus,
+    cpu,
     instructions::{self, AddressingMode, Instruction},
     parser::parse_instruction,
     tracer::errors::{CommandError, HotkeyError},
@@ -82,7 +82,7 @@ add_parse_executor! {
                     if let Ok(value) = parse_value_argument(data) &&
                         let Some(cpu) = Rc::get_mut(&mut tracer.cpu)
                         && value <= u8::MAX as usize {
-                            cpu.memory.data[target_addr as usize + index] = value as u8;
+                            cpu.memory[target_addr as usize + index] = value as u8;
                         }
 
                     Ok(())
@@ -462,7 +462,7 @@ pub struct ProcessorStatusHistoryEntry {
     a: u8,
     x: u8,
     y: u8,
-    status: ProcessorStatus,
+    status: cpu::ProcessorStatus,
 }
 
 type CpuRunningPredicate = Option<Box<dyn Fn(&Tracer) -> bool>>;
@@ -472,7 +472,7 @@ pub struct Tracer {
 
     parsed_instructions: Vec<(usize, Instruction)>,
 
-    pub cpu: Rc<CPU>,
+    pub cpu: Rc<cpu::CPU>,
     pub is_cpu_running: bool,
     pub is_cpu_paused: bool,
     pub running_predicate: CpuRunningPredicate,
@@ -499,7 +499,7 @@ pub enum MemoryCursorTracking {
 }
 
 impl Tracer {
-    pub fn new(cpu: Rc<CPU>) -> Self {
+    pub fn new(cpu: Rc<cpu::CPU>) -> Self {
         Tracer {
             cpu,
             parsed_instructions: vec![],
@@ -532,7 +532,7 @@ impl Tracer {
             }
 
             if let Ok((offset, instruction)) =
-                parse_instruction(index as u16, &self.cpu.memory.data)
+                parse_instruction(index as u16, &self.cpu.memory)
             {
                 self.parsed_instructions.push((index, instruction));
                 index += offset;
@@ -857,7 +857,7 @@ impl Tracer {
                 );
                 let memory_title_bottom = format!(
                     "Bin: {0:#010b} Dec: {0:03} Addr:{1:#06X}",
-                    self.cpu.memory.data[self.memory_cursor_pos], self.memory_cursor_pos
+                    self.cpu.memory[self.memory_cursor_pos], self.memory_cursor_pos
                 );
                 let memory_block = Block::bordered()
                     .padding(Padding::horizontal(1))
@@ -964,12 +964,13 @@ impl Tracer {
                                     format!("({result_address:#06X})")
                                 }
 
+                                AddressingMode::Absolute |
                                 AddressingMode::AbsoluteX |
                                 AddressingMode::AbsoluteY |
                                 AddressingMode::IndirectIndexed |
                                 AddressingMode::IndexedIndirect => {
                                     format!("({result_address:#06X}) [{0:#04X} ({0})]",
-                                        self.cpu.memory.data[result_address as usize]
+                                        self.cpu.memory[result_address as usize]
                                     )
                                 }
 
@@ -977,7 +978,7 @@ impl Tracer {
                                 AddressingMode::ZeroPageX |
                                 AddressingMode::ZeroPageY => {
                                     format!("({result_address:#04X}) [{0:#04X} ({0})]",
-                                        self.cpu.memory.data[result_address as usize]
+                                        self.cpu.memory[result_address as usize]
                                     )
                                 }
 
@@ -1014,17 +1015,17 @@ impl Tracer {
                         reg.a,
                         reg.x,
                         reg.y,
-                        reg.status.contains(ProcessorStatus::NegativeFlag) as u8,
-                        reg.status.contains(ProcessorStatus::OverflowFlag) as u8,
-                        reg.status.contains(ProcessorStatus::BreakCommand) as u8,
-                        reg.status.contains(ProcessorStatus::DecimalMode) as u8,
-                        reg.status.contains(ProcessorStatus::InterruptDisable) as u8,
-                        reg.status.contains(ProcessorStatus::ZeroFlag) as u8,
-                        reg.status.contains(ProcessorStatus::CarryFlag) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::NegativeFlag) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::OverflowFlag) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::BreakCommand) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::DecimalMode) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::InterruptDisable) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::ZeroFlag) as u8,
+                        reg.status.contains(cpu::ProcessorStatus::CarryFlag) as u8,
                         reg.status.bits() | 1 << 5,
                         reg.status.bits() | 1 << 5,
-                        reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
-                        reg.status.bits() | 1 << 5 | ProcessorStatus::BreakCommand.bits(),
+                        reg.status.bits() | 1 << 5 | cpu::ProcessorStatus::BreakCommand.bits(),
+                        reg.status.bits() | 1 << 5 | cpu::ProcessorStatus::BreakCommand.bits(),
                     );
 
                     acc.push(Line::from(Span::from(string)));
@@ -1049,7 +1050,7 @@ impl Tracer {
             }
         };
 
-        self.cpu.memory.data[from_addr..]
+        self.cpu.memory[from_addr..]
             .chunks_exact(16)
             .enumerate()
             .fold(Vec::new(), |mut acc, (chunk_index, values)| {
@@ -1097,7 +1098,7 @@ impl Tracer {
         }
 
 
-        self.cpu.memory.data[range]
+        self.cpu.memory[range]
             .iter()
             .rev()
             .enumerate()
