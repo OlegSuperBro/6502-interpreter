@@ -1,0 +1,11 @@
+mod arithmetic;
+mod branch;
+mod incdec;
+mod jumpcall;
+mod load;
+mod logical;
+mod regtrans;
+mod shift;
+mod stack;
+mod statusflag;
+mod systemfunc;
