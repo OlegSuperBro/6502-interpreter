@@ -227,16 +227,16 @@ impl CPU {
             return Err(ExecutionError::InvalidBcdValue(num));
         }
 
-        Ok(100 - num)
+        Ok(99 - num)
     }
 
     fn bcd_overflowing_add(value: u8, operand: u8) -> Result<(u8, bool), ExecutionError> {
-        if value > 99 {
-            return Err(ExecutionError::InvalidBcdValue(value));
-        }
-        if operand > 99 {
-            return Err(ExecutionError::InvalidBcdValue(operand));
-        }
+        // if value > 99 {
+        //     return Err(ExecutionError::InvalidBcdValue(value));
+        // }
+        // if operand > 99 {
+        //     return Err(ExecutionError::InvalidBcdValue(operand));
+        // }
 
         let mut result = value + operand;
         let mut carry = false;
