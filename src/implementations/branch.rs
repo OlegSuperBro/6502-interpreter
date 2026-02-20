@@ -18,7 +18,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BEQ => {
@@ -26,7 +26,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BPL => {
@@ -34,7 +34,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BCC => {
@@ -42,7 +42,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BCS => {
@@ -50,7 +50,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BMI => {
@@ -58,7 +58,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BVC => {
@@ -66,7 +66,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
 
             instructions::BranchOp::BVS => {
@@ -74,7 +74,7 @@ impl ProcessOpcode<BranchOp> for CPU {
                     self.registers.program_counter = self.get_address(mode, value)?;
                     return Ok(false);
                 }
-                Ok(false)
+                Ok(true)
             }
         }
     }

@@ -123,16 +123,11 @@ impl ProcessOpcode<ArithmeticOp> for CPU {
                         1
                     };
 
-                    let operand = value + 1;
+                    let operand = CPU::bcd_not(value)? + carry;
+
                     let acc = CPU::hex2bcd(self.registers.accumulator)?;
 
-                    let (mut final_result, result_carry) = (acc + carry).overflowing_sub(operand);
-
-                    // println!("{operand} {acc} {final_result} {result_carry}");
-                    if result_carry {
-                        // println!("{}", (100 - (u8::MAX - final_result)));
-                        final_result = 100 - (u8::MAX - final_result);
-                    }
+                    let (final_result, result_carry) = CPU::bcd_overflowing_add(acc, operand)?;
 
                     let mut flags = CPU::get_flags(
                         Some(old_accumulator),
@@ -143,11 +138,6 @@ impl ProcessOpcode<ArithmeticOp> for CPU {
 
                     if result_carry {
                         flags |= ProcessorStatus::CarryFlag;
-                    }
-
-                    if final_result > 99 {
-                        flags |= ProcessorStatus::CarryFlag;
-                        final_result -= 100;
                     }
 
                     self.set_flags(flags, mask);
@@ -189,7 +179,6 @@ impl ProcessOpcode<ArithmeticOp> for CPU {
                     mask_zn | ProcessorStatus::CarryFlag,
                 );
             }
-
             instructions::ArithmeticOp::CPY => {
                 let old_value = self.registers.y;
 
@@ -231,5 +220,32 @@ impl CPU {
         } else {
             Err(ExecutionError::InvalidBcdValue(num))
         }
+    }
+
+    fn bcd_not(num: u8) -> Result<u8, ExecutionError> {
+        if num > 99 {
+            return Err(ExecutionError::InvalidBcdValue(num));
+        }
+
+        Ok(100 - num)
+    }
+
+    fn bcd_overflowing_add(value: u8, operand: u8) -> Result<(u8, bool), ExecutionError> {
+        if value > 99 {
+            return Err(ExecutionError::InvalidBcdValue(value));
+        }
+        if operand > 99 {
+            return Err(ExecutionError::InvalidBcdValue(operand));
+        }
+
+        let mut result = value + operand;
+        let mut carry = false;
+
+        if result > 99 {
+            carry = true;
+            result -= 100;
+        }
+
+        Ok((result, carry))
     }
 }
