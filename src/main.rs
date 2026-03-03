@@ -1,4 +1,3 @@
-use core::panic;
 use std::{env, error::Error, fs::{self}, io::{self, Read}, path::Path, rc::Rc};
 
 use crate::{instructions::{OpCode}, parser::parse_instruction, tracer::{Tracer, TracerError}};
@@ -74,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         let (offset, instruction);
-        let res = parse_instruction(cpu.registers.program_counter, &cpu.memory).inspect_err(|_x| eprintln!("Error during parsing"));
+        let res: Result<(usize, instructions::Instruction), Box<dyn Error>> = parse_instruction(cpu.registers.program_counter, &cpu.memory);
 
         if let Ok(values) = res {
             (offset, instruction) = values
@@ -130,7 +129,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if prev_address == cpu.registers.program_counter {
             println!("Stuck at address {prev_address:#x} after {total_ran}");
-            panic!("Stuck at address {prev_address:#x} after {total_ran}");
+            return Ok(());
+            // panic!("Stuck at address {prev_address:#x} after {total_ran}");
         }
 
         prev_address = cpu.registers.program_counter;

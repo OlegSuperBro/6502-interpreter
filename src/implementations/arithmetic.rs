@@ -204,22 +204,23 @@ impl ProcessOpcode<ArithmeticOp> for CPU {
 impl CPU {
     fn hex2bcd(num: u8) -> Result<u8, ExecutionError> {
         // println!("hex2bcd {num:#X}");
-        if (num & 0xF0) <= 0x99 &&
-           (num & 0x0F) <= 0x09{
-            Ok(num - 6 * (num >> 4))
-        } else {
-            Err(ExecutionError::InvalidBcdValue(num))
-        }
+        Ok(num - 6 * (num >> 4))
+        // if (num & 0xF0) <= 0x99 &&
+        //    (num & 0x0F) <= 0x09{
+        //     Ok(num - 6 * (num >> 4))
+        // } else {
+        //     Err(ExecutionError::InvalidBcdValue(num))
+        // }
     }
 
     fn bcd2hex(num: u8) -> Result<u8, ExecutionError> {
-        // println!("bcd2hex {num}");
-        if num <= 99 {
-            // Ok(num + 6 * (num >> 4))
-            Ok(u8::from_str_radix(format!("{num}").as_str(), 16).unwrap())
-        } else {
-            Err(ExecutionError::InvalidBcdValue(num))
-        }
+        Ok(num + 6 * (num / 10))
+        // if num <= 99 {
+        //     // Ok(num + 6 * (num >> 4))
+        //     Ok(u8::from_str_radix(format!("{num}").as_str(), 16).unwrap())
+        // } else {
+        //     Err(ExecutionError::InvalidBcdValue(num))
+        // }
     }
 
     fn bcd_not(num: u8) -> Result<u8, ExecutionError> {

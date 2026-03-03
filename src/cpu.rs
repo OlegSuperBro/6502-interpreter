@@ -239,12 +239,8 @@ impl CPU {
     pub fn get_flags(prev_value: Option<u8>, operand: Option<u8>, result_value: &u8, mask: Option<ProcessorStatus>) -> ProcessorStatus {
         let mut result_flag = ProcessorStatus::empty();
 
-        if let Some(prev_value) = prev_value {
-            // result_flag |= if prev_value & 0b10000000 != result_value & 0b10000000 {ProcessorStatus::OverflowFlag} else {ProcessorStatus::empty()};
-
-            if let Some(operand) = operand {
-                result_flag |= if !(prev_value ^ operand) & (prev_value ^ result_value) & 0b10000000 != 0 {ProcessorStatus::OverflowFlag} else {ProcessorStatus::empty()};
-            }
+        if let (Some(prev_value), Some(operand)) = (prev_value, operand) {
+            result_flag |= if !(prev_value ^ operand) & (prev_value ^ result_value) & 0b10000000 != 0 {ProcessorStatus::OverflowFlag} else {ProcessorStatus::empty()};
         }
 
         if *result_value == 0 {
