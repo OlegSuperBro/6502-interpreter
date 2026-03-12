@@ -1,8 +1,8 @@
 use crate::{
-    cpu::{CPU, ProcessOpcode, ProcessorStatus}, errors::ExecutionError, instructions::{self, ArithmeticOp}
+    cpu::{CPU, ProcessInstruction, ProcessorStatus}, errors::ExecutionError, instructions::{self, ArithmeticOp}
 };
 
-impl ProcessOpcode<ArithmeticOp> for CPU {
+impl ProcessInstruction<ArithmeticOp> for CPU {
     fn process(
         &mut self,
         instruction: crate::instructions::Instruction,

@@ -1,9 +1,9 @@
 use crate::{
-    cpu::{CPU, ProcessOpcode},
+    cpu::{CPU, ProcessInstruction},
     instructions::{self, JumpCallOp},
 };
 
-impl ProcessOpcode<JumpCallOp> for CPU {
+impl ProcessInstruction<JumpCallOp> for CPU {
     fn process(
         &mut self,
         instruction: crate::instructions::Instruction,

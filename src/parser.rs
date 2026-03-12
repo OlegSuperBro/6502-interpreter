@@ -76,6 +76,15 @@ impl TryFrom<u8> for OpCodeGroup {
     }
 }
 
+pub fn parse_opcode_byte(byte: &u8) -> Result<(OpCode, AddressingMode), ParseError> {
+    let group = parse_group(byte)?;
+    
+    let opcode = parse_opcode(byte, &group)?;
+    let addressing_mode = parse_address_mode(byte, &opcode, &group)?;
+
+    Ok((opcode, addressing_mode))
+}
+
 fn parse_group(byte: &u8) -> Result<OpCodeGroup, ParseError> {
     let group = byte & 0b00000011;
 

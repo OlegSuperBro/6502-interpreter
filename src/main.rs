@@ -99,10 +99,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let res = cpu.run_instruction(instruction);
         total_ran += 1;
 
-        if let Ok(increase) = res {
-            if increase {
-                cpu.registers.program_counter = cpu.registers.program_counter.wrapping_add(offset as u16);
-            }
+        if res.is_ok() {
+            cpu.registers.program_counter = cpu.registers.program_counter.wrapping_add(offset as u16);
         } else {
             println!("----------------------------------");
             println!("{instruction:?}");

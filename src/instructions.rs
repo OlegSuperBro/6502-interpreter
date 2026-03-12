@@ -390,7 +390,7 @@ impl TryFrom<&str> for Instruction {
 
 impl Instruction {
     pub fn get_code_size(&self) -> usize {
-         match self.addressing_mode {
+        match self.addressing_mode {
                 // Read 0 more bytes
                 AddressingMode::Implicit |
                 AddressingMode::Accumulator => 1,

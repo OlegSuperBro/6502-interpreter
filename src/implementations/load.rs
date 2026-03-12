@@ -1,6 +1,6 @@
-use crate::{cpu::{CPU, ProcessOpcode, ProcessorStatus}, instructions::{self, LoadOp}};
+use crate::{cpu::{CPU, ProcessInstruction, ProcessorStatus}, instructions::{self, LoadOp}};
 
-impl ProcessOpcode<LoadOp> for CPU {
+impl ProcessInstruction<LoadOp> for CPU {
     fn process(&mut self, instruction: crate::instructions::Instruction, op: LoadOp) -> Result<bool, Box<dyn std::error::Error>> {
         let mode = instruction.addressing_mode;
         let value = instruction.value;
